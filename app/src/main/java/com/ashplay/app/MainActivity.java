@@ -16,7 +16,6 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.FrameLayout;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
@@ -62,7 +61,6 @@ public class MainActivity extends AppCompatActivity {
                     WebView view,
                     SslErrorHandler handler,
                     SslError error) {
-
                 handler.proceed();
             }
 
@@ -99,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
                 );
 
                 setContentView(view);
+                hideSystemUI();
             }
 
             @Override
@@ -182,6 +181,27 @@ public class MainActivity extends AppCompatActivity {
         );
     }
 
+    private void hideSystemUI() {
+
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        );
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+
+        if (hasFocus && customView != null) {
+            hideSystemUI();
+        }
+    }
+
     private boolean isAllowedUrl(Uri uri) {
         return uri != null
                 && "https".equalsIgnoreCase(uri.getScheme())
@@ -189,6 +209,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void hideCustomView() {
+
         if (customView == null) {
             return;
         }
@@ -202,6 +223,10 @@ public class MainActivity extends AppCompatActivity {
         if (view.getParent() instanceof ViewGroup) {
             ((ViewGroup) view.getParent()).removeView(view);
         }
+
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_VISIBLE
+        );
 
         setRequestedOrientation(previousOrientation);
         setContentView(webView);
@@ -238,6 +263,7 @@ public class MainActivity extends AppCompatActivity {
                 List<String> resources = new ArrayList<>();
 
                 for (String resource : request.getResources()) {
+
                     if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
                             && ContextCompat.checkSelfPermission(
                             this, Manifest.permission.CAMERA)
@@ -266,6 +292,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+
         if (pendingPermissionRequest != null) {
             pendingPermissionRequest.deny();
             pendingPermissionRequest = null;
