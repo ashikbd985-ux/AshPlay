@@ -1,4 +1,3 @@
-
 package com.ashplay.app;
 
 import android.Manifest;
@@ -10,6 +9,8 @@ import android.os.Bundle;
 import android.content.SharedPreferences;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.graphics.Color;
 import android.webkit.PermissionRequest;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
@@ -21,6 +22,10 @@ import android.webkit.WebViewClient;
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -33,6 +38,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int MEDIA_PERMISSION_CODE = 501;
 
     private WebView webView;
+    private FrameLayout rootLayout;
     private PermissionRequest pendingRequest;
     private View fullScreenView;
     private WebChromeClient.CustomViewCallback fullScreenCallback;
@@ -44,8 +50,17 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        getWindow().setStatusBarColor(android.graphics.Color.BLACK);
-        getWindow().setNavigationBarColor(android.graphics.Color.BLACK);
+        getWindow().setStatusBarColor(Color.BLACK);
+        getWindow().setNavigationBarColor(Color.BLACK);
+
+        // Same behavior on every Android version: draw edge-to-edge
+        // and leave room for the system bars ourselves.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        androidx.core.view.WindowInsetsControllerCompat insetsController =
+                WindowCompat.getInsetsController(
+                        getWindow(), getWindow().getDecorView());
+        insetsController.setAppearanceLightStatusBars(false);
+        insetsController.setAppearanceLightNavigationBars(false);
 
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
@@ -177,7 +192,22 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        setContentView(webView);
+        rootLayout = new FrameLayout(this);
+        rootLayout.setBackgroundColor(Color.BLACK);
+        rootLayout.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout, (v, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars()
+                            | WindowInsetsCompat.Type.displayCutout()
+                            | WindowInsetsCompat.Type.ime());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return WindowInsetsCompat.CONSUMED;
+        });
+
+        setContentView(rootLayout);
         webView.loadUrl(WEBSITE_URL);
 
         getOnBackPressedDispatcher().addCallback(
@@ -367,7 +397,8 @@ public class MainActivity extends AppCompatActivity {
 
         setRequestedOrientation(previousRequestedOrientation);
 
-        setContentView(webView);
+        setContentView(rootLayout);
+        ViewCompat.requestApplyInsets(rootLayout);
 
         if (callback != null) {
             callback.onCustomViewHidden();
