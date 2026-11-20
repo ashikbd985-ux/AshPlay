@@ -1,6 +1,7 @@
 package com.ashplay.app;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ActivityInfo;
 import android.net.Uri;
@@ -13,6 +14,7 @@ import android.widget.FrameLayout;
 import android.graphics.Color;
 import android.webkit.PermissionRequest;
 import android.webkit.SslErrorHandler;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -20,6 +22,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
@@ -42,6 +46,20 @@ public class MainActivity extends AppCompatActivity {
     private PermissionRequest pendingRequest;
     private View fullScreenView;
     private WebChromeClient.CustomViewCallback fullScreenCallback;
+
+    // ওয়েবসাইটের ফাইল বাটন (+ / ছবি / ভিডিও) চাপলে ফোনের ফাইল পিকার খোলার জন্য
+    private ValueCallback<Uri[]> filePathCallback;
+
+    private final ActivityResultLauncher<Intent> fileChooserLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.StartActivityForResult(),
+                    result -> {
+                        if (filePathCallback == null) return;
+                        Uri[] uris = WebChromeClient.FileChooserParams
+                                .parseResult(result.getResultCode(), result.getData());
+                        filePathCallback.onReceiveValue(uris);
+                        filePathCallback = null;
+                    });
 
     private int previousRequestedOrientation =
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
@@ -148,6 +166,27 @@ public class MainActivity extends AppCompatActivity {
             public void onPermissionRequest(PermissionRequest request) {
                 runOnUiThread(
                         () -> handleWebsitePermission(request));
+            }
+
+            @Override
+            public boolean onShowFileChooser(
+                    WebView view,
+                    ValueCallback<Uri[]> callback,
+                    FileChooserParams params) {
+
+                // আগের অসমাপ্ত অনুরোধ থাকলে বাতিল করে নতুনটা নেয়
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                }
+                filePathCallback = callback;
+
+                try {
+                    fileChooserLauncher.launch(params.createIntent());
+                    return true;
+                } catch (Exception exception) {
+                    filePathCallback = null;
+                    return false;
+                }
             }
 
             @Override
@@ -407,6 +446,11 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(null);
+            filePathCallback = null;
+        }
 
         if (pendingRequest != null) {
             pendingRequest.deny();
