@@ -107,56 +107,16 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPermissionRequest(PermissionRequest request) {
+                runOnUiThread(() ->
+                        handleWebPermissionRequest(request));
+            }
 
-                Uri origin = request.getOrigin();
+            @Override
+            public void onPermissionRequestCanceled(
+                    PermissionRequest request) {
 
-                if (origin == null ||
-                        !"https".equalsIgnoreCase(origin.getScheme()) ||
-                        !WEBSITE_HOST.equalsIgnoreCase(origin.getHost())) {
-                    request.deny();
-                    return;
-                }
-
-                List<String> androidPermissions = new ArrayList<>();
-                List<String> webResources = new ArrayList<>();
-
-                for (String resource : request.getResources()) {
-
-                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
-                        androidPermissions.add(Manifest.permission.CAMERA);
-                        webResources.add(resource);
-                    }
-
-                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
-                        androidPermissions.add(Manifest.permission.RECORD_AUDIO);
-                        webResources.add(resource);
-                    }
-                }
-
-                if (webResources.isEmpty()) {
-                    request.deny();
-                    return;
-                }
-
-                boolean allGranted = true;
-
-                for (String permission : androidPermissions) {
-                    if (ContextCompat.checkSelfPermission(
-                            MainActivity.this, permission)
-                            != PackageManager.PERMISSION_GRANTED) {
-                        allGranted = false;
-                        break;
-                    }
-                }
-
-                if (allGranted) {
-                    request.grant(webResources.toArray(new String[0]));
-                } else {
-                    pendingPermissionRequest = request;
-                    requestPermissions(
-                            androidPermissions.toArray(new String[0]),
-                            1001
-                    );
+                if (pendingPermissionRequest == request) {
+                    pendingPermissionRequest = null;
                 }
             }
         });
@@ -178,6 +138,86 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
                 }
+        );
+    }
+
+    private void handleWebPermissionRequest(
+            PermissionRequest request) {
+
+        if (isFinishing() || isDestroyed() || webView == null) {
+            request.deny();
+            return;
+        }
+
+        Uri origin = request.getOrigin();
+
+        if (origin == null
+                || !"https".equalsIgnoreCase(origin.getScheme())
+                || !WEBSITE_HOST.equalsIgnoreCase(origin.getHost())) {
+            request.deny();
+            return;
+        }
+
+        List<String> androidPermissions = new ArrayList<>();
+        List<String> webResources = new ArrayList<>();
+
+        for (String resource : request.getResources()) {
+
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+
+                if (!androidPermissions.contains(
+                        Manifest.permission.RECORD_AUDIO)) {
+                    androidPermissions.add(
+                            Manifest.permission.RECORD_AUDIO);
+                }
+
+                webResources.add(resource);
+
+            } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+
+                if (!androidPermissions.contains(
+                        Manifest.permission.CAMERA)) {
+                    androidPermissions.add(
+                            Manifest.permission.CAMERA);
+                }
+
+                webResources.add(resource);
+            }
+        }
+
+        if (webResources.isEmpty()) {
+            request.deny();
+            return;
+        }
+
+        boolean allGranted = true;
+
+        for (String permission : androidPermissions) {
+
+            if (ContextCompat.checkSelfPermission(
+                    this, permission)
+                    != PackageManager.PERMISSION_GRANTED) {
+
+                allGranted = false;
+                break;
+            }
+        }
+
+        if (allGranted) {
+            request.grant(webResources.toArray(new String[0]));
+            return;
+        }
+
+        if (pendingPermissionRequest != null
+                && pendingPermissionRequest != request) {
+            pendingPermissionRequest.deny();
+        }
+
+        pendingPermissionRequest = request;
+
+        requestPermissions(
+                androidPermissions.toArray(new String[0]),
+                1001
         );
     }
 
@@ -245,48 +285,43 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(
                 requestCode, permissions, grantResults);
 
-        if (requestCode == 1001 && pendingPermissionRequest != null) {
+        if (requestCode != 1001) {
+            return;
+        }
 
-            boolean granted = grantResults.length > 0;
+        PermissionRequest request = pendingPermissionRequest;
+        pendingPermissionRequest = null;
 
-            for (int result : grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    granted = false;
-                    break;
-                }
+        if (request == null || isFinishing() || isDestroyed()) {
+            return;
+        }
+
+        boolean audioGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+
+        boolean cameraGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+
+        List<String> grantedResources = new ArrayList<>();
+
+        for (String resource : request.getResources()) {
+
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
+                    && audioGranted) {
+                grantedResources.add(resource);
+
+            } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
+                    && cameraGranted) {
+                grantedResources.add(resource);
             }
+        }
 
-            PermissionRequest request = pendingPermissionRequest;
-            pendingPermissionRequest = null;
-
-            if (granted) {
-                List<String> resources = new ArrayList<>();
-
-                for (String resource : request.getResources()) {
-
-                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
-                            && ContextCompat.checkSelfPermission(
-                            this, Manifest.permission.CAMERA)
-                            == PackageManager.PERMISSION_GRANTED) {
-                        resources.add(resource);
-                    }
-
-                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
-                            && ContextCompat.checkSelfPermission(
-                            this, Manifest.permission.RECORD_AUDIO)
-                            == PackageManager.PERMISSION_GRANTED) {
-                        resources.add(resource);
-                    }
-                }
-
-                if (!resources.isEmpty()) {
-                    request.grant(resources.toArray(new String[0]));
-                } else {
-                    request.deny();
-                }
-            } else {
-                request.deny();
-            }
+        if (!grantedResources.isEmpty()) {
+            request.grant(grantedResources.toArray(new String[0]));
+        } else {
+            request.deny();
         }
     }
 
