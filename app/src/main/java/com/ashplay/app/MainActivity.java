@@ -9,6 +9,8 @@ import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.PermissionRequest;
+import android.webkit.SslErrorHandler;
+import android.net.http.SslError;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -54,6 +56,16 @@ public class MainActivity extends AppCompatActivity {
         settings.setSupportMultipleWindows(false);
 
         webView.setWebViewClient(new WebViewClient() {
+
+            @Override
+            public void onReceivedSslError(
+                    WebView view,
+                    SslErrorHandler handler,
+                    SslError error) {
+
+                handler.proceed();
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(
                     WebView view, WebResourceRequest request) {
