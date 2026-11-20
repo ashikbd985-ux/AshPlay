@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
+
     private static final String WEBSITE_URL = "https://192.168.168.10";
     private static final String WEBSITE_HOST = "192.168.168.10";
     private static final int MEDIA_PERMISSION_CODE = 501;
@@ -35,6 +36,7 @@ public class MainActivity extends AppCompatActivity {
     private PermissionRequest pendingRequest;
     private View fullScreenView;
     private WebChromeClient.CustomViewCallback fullScreenCallback;
+
     private int previousRequestedOrientation =
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
 
@@ -57,6 +59,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
 
         webView.setWebViewClient(new WebViewClient() {
+
             @Override
             public boolean shouldOverrideUrlLoading(
                     WebView view, WebResourceRequest request) {
@@ -104,29 +107,28 @@ public class MainActivity extends AppCompatActivity {
 
                 new androidx.appcompat.app.AlertDialog.Builder(
                         MainActivity.this)
-                        .setTitle("নিরাপত্তা সতর্কতা")
-                        .setMessage(
-                                "এই ওয়েবসাইটের SSL সার্টিফিকেট Android যাচাই করতে পারেনি।\n\n"
-                                + "আপনি কি এই নির্দিষ্ট সার্টিফিকেটটি বিশ্বাস করে চালিয়ে যেতে চান? "
-                                + "ওকে চাপলে একই সার্টিফিকেট পরবর্তীতে আর জিজ্ঞেস করা হবে না। "
-                                + "সার্টিফিকেট পরিবর্তন হলে আবার অনুমতি চাইবে।\n\n"
-                                + "শুধু নিজের পরিচিত ও বিশ্বস্ত ওয়েবসাইট হলে ওকে চাপুন।")
-                        .setPositiveButton("ওকে", (dialog, which) -> {
+                        .setMessage("Do you want to enter ?")
+                        .setPositiveButton("Yes", (dialog, which) -> {
                             preferences.edit()
                                     .putString(WEBSITE_HOST, fingerprint)
                                     .apply();
+
                             handler.proceed();
                         })
-                        .setNegativeButton(
-                                "ক্যান্সেল",
-                                (dialog, which) -> handler.cancel())
-                        .setOnCancelListener(
-                                dialog -> handler.cancel())
+                        .setNegativeButton("No", (dialog, which) -> {
+                            handler.cancel();
+                            finish();
+                        })
+                        .setOnCancelListener(dialog -> {
+                            handler.cancel();
+                            finish();
+                        })
                         .show();
             }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
+
             @Override
             public void onPermissionRequest(PermissionRequest request) {
                 runOnUiThread(
@@ -180,6 +182,7 @@ public class MainActivity extends AppCompatActivity {
 
         getOnBackPressedDispatcher().addCallback(
                 this, new OnBackPressedCallback(true) {
+
             @Override
             public void handleOnBackPressed() {
                 if (fullScreenView != null) {
@@ -229,6 +232,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleWebsitePermission(PermissionRequest request) {
+
         Uri origin = request.getOrigin();
 
         if (origin == null
@@ -242,6 +246,7 @@ public class MainActivity extends AppCompatActivity {
         List<String> androidPermissions = new ArrayList<>();
 
         for (String resource : request.getResources()) {
+
             if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
                 webResources.add(resource);
                 androidPermissions.add(Manifest.permission.RECORD_AUDIO);
@@ -269,7 +274,9 @@ public class MainActivity extends AppCompatActivity {
 
         if (granted) {
             request.grant(webResources.toArray(new String[0]));
+
         } else {
+
             if (pendingRequest != null) {
                 pendingRequest.deny();
             }
@@ -309,6 +316,7 @@ public class MainActivity extends AppCompatActivity {
         List<String> allowed = new ArrayList<>();
 
         for (String resource : request.getResources()) {
+
             if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
                     && ContextCompat.checkSelfPermission(
                     this, Manifest.permission.RECORD_AUDIO)
@@ -339,9 +347,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void exitFullScreen() {
+
         if (fullScreenView == null) return;
 
         View view = fullScreenView;
+
         WebChromeClient.CustomViewCallback callback =
                 fullScreenCallback;
 
@@ -366,6 +376,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+
         if (pendingRequest != null) {
             pendingRequest.deny();
             pendingRequest = null;
