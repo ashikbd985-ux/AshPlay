@@ -1,29 +1,16 @@
-# AshPlay Android Project
-
-এটি AshPlay-এর প্রথম Home page-এর Android Studio source project। অ্যাপটি XAMPP `htdocs`-এর `ashplay-api.php` থেকে ক্যাটাগরি ও ভিডিও তালিকা নেয় এবং ভিডিও সরাসরি LAN server থেকে চালায়।
-
-## GitHub-এ আপলোড
-1. ZIP Extract করুন।
-2. Extract করা `AshPlayProject` ফোল্ডারের ভেতরের সব ফাইল GitHub repository-র root-এ আপলোড করুন। `AshPlayProject` নামের অতিরিক্ত parent folder তৈরি করবেন না।
-3. Commit changes করুন।
-4. Actions tab → Build AshPlay APK → Run workflow। Push করলেও workflow স্বয়ংক্রিয়ভাবে চলবে।
-5. সফল run-এর Artifacts থেকে `AshPlay-debug-APK` ডাউনলোড করুন। ZIP extract করে `app-debug.apk` ইনস্টল করুন।
-
-## XAMPP API
-- `htdocs/ashplay-api.php` ফাইলটি কম্পিউটারের `C:\xampp\htdocs\`-এ কপি করুন।
-- ফোন ও কম্পিউটার একই Wi-Fi/LAN-এ রাখুন এবং Apache চালু রাখুন।
-- API ঠিকানা বর্তমানে `http://192.168.168.10/ashplay-api.php`। কম্পিউটারের IP বদলালে `app/src/main/java/com/ashplay/MainActivity.kt`-এর `API_URL` বদলাতে হবে।
-- API-তে ভিডিও ক্যাটাগরি/ফাইলগুলো XAMPP `htdocs`-এর প্রথম স্তরের ক্যাটাগরি ফোল্ডারে রাখুন।
-
-## এই build-এ
-- আপনার সরবরাহ করা আসল AshPlay logo ব্যবহার করা হয়েছে।
-- হেডার: বামে TX এবং গত ২ সেকেন্ডে অ্যাপের received data, মাঝখানে আসল logo ও AshPlay, ডানে সবুজ status dot ও online count।
-- সার্চ বার ও Search button।
-- প্রতিটি category থেকে একটি random video নিয়ে vertical feed।
-- ভিডিওর thumbnail ডিভাইসে সম্ভব হলে ভিডিওর প্রথম frame থেকে তৈরি হয়; codec/server সমর্থন না করলে fallback card দেখাবে।
-- নিচে শুধু Home, Friends, Profile। Friends/Profile আপাতত placeholder screen; এগুলোর ফিচার পরবর্তী ধাপের কাজ।
-- ভিডিও চালু থাকলে API-তে heartbeat পাঠায়; online count API থেকে refresh হয়।
-
-## নোট
-- TX হলো অ্যাপের UID-র inbound network bytes-এর ২ সেকেন্ডের delta; এটি শুধু নির্দিষ্ট ভিডিওর আলাদা bitrate নয়।
-- প্রথম পেজের UI এখানে স্থির রাখা হয়েছে। Friends/Profile-এর অভ্যন্তরীণ ফিচার এখনো তৈরি করা হয়নি।
+AshPlay Android (শুধু WebView অ্যাপ)
+এই অ্যাপে ওয়েবসাইটের কোনো ফাইল নেই (index.php, HTML, CSS, JS, ভিডিও, API কিছুই না)। অ্যাপ শুধু আপনার ওয়েবসাইটের ঠিকানা খোলে। UI, ফিচার, ভিডিও তালিকা সব ওয়েবসাইট থেকে আসে, তাই আপডেট করতে হলে শুধু ওয়েবসাইট (index.php) আপডেট করুন। APK আর বানাতে হবে না।
+একবারের সেটআপ
+app/src/main/java/com/ashplay/MainActivity.kt-এর DEFAULT_SITE_URL-এ আপনার স্থায়ী ঠিকানা দিন (যেমন https://yourdomain.com/)। LAN IP না দিয়ে ডোমেইন দেওয়াই ভালো, কারণ IP বদলালে APK বদলাতে হয়।
+সব ফাইল GitHub repository-র root-এ আপলোড করুন।
+Actions → Build AshPlay APK → Run workflow।
+Artifacts থেকে AshPlay-debug-APK নামিয়ে app-debug.apk ইনস্টল করুন।
+ভবিষ্যতে সার্ভারের ঠিকানা বদলালে (APK না বানিয়ে)
+সংযোগ ব্যর্থ হলে দেখানো পেজে Change server address চাপুন, নতুন ঠিকানা Save করুন।
+অথবা ওয়েবসাইটের কোনো লিংক/বাটনে ashplay://change-server দিন, চাপলে একই ডায়ালগ খুলবে।
+অ্যাপ যা করে
+ওয়েবসাইট দেখানো, ভিডিও ফুলস্ক্রিন, ফাইল আপলোড/ডাউনলোড, alert/confirm।
+ক্যামেরা, মাইক, লোকেশনের অনুমতি (ভবিষ্যতে ওয়েবসাইটে লাগলেও APK বদলাতে হবে না)।
+ব্যাক বাটন ওয়েবসাইটের ইতিহাসে পিছনে যায়।
+অন্য ওয়েবসাইটের লিংক ফোনের ব্রাউজারে খোলে।
+User-Agent-এ AshPlayApp/1 যোগ থাকে, ওয়েবসাইট চাইলে এটা দেখে অ্যাপ চিনতে পারে।
