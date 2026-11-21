@@ -86,12 +86,7 @@ public class NotifyService extends Service {
     private final Set<String> knownCalls =
             new HashSet<>();
 
-    // =========================================
-    // START SERVICE
-    // =========================================
-
     public static void start(android.content.Context context) {
-
         try {
             ContextCompat.startForegroundService(
                     context,
@@ -102,21 +97,14 @@ public class NotifyService extends Service {
     }
 
     public static void onAppVisible() {
-
         NotifyService service = instance;
-
         if (service != null) {
             service.main.post(service::clearAllAlerts);
         }
     }
 
-    // =========================================
-    // SERVICE CREATE
-    // =========================================
-
     @Override
     public void onCreate() {
-
         super.onCreate();
 
         instance = this;
@@ -130,35 +118,37 @@ public class NotifyService extends Service {
                 getSystemService(NOTIFICATION_SERVICE);
 
         cursor = prefs.getLong("cursor", -1);
-
         badgeCount = prefs.getInt("badge_count", 0);
+
+        // আগের কল ID পুনরায় চালুর পরেও সংরক্ষণ
+        String savedCalls = prefs.getString("known_calls", "");
+
+        if (savedCalls != null && !savedCalls.isEmpty()) {
+            for (String id : savedCalls.split(",")) {
+                if (id != null && !id.trim().isEmpty()) {
+                    knownCalls.add(id.trim());
+                }
+            }
+        }
 
         createChannels();
 
         try {
-
             Notification notification =
                     buildForegroundNotification();
 
             if (Build.VERSION.SDK_INT >= 34) {
-
                 ServiceCompat.startForeground(
                         this,
                         ID_FG,
                         notification,
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 );
-
             } else {
-
-                startForeground(
-                        ID_FG,
-                        notification
-                );
+                startForeground(ID_FG, notification);
             }
 
         } catch (Exception e) {
-
             stopSelf();
         }
     }
@@ -169,9 +159,7 @@ public class NotifyService extends Service {
             int flags,
             int startId
     ) {
-
         if (!running) {
-
             running = true;
 
             worker = new Thread(
@@ -188,7 +176,6 @@ public class NotifyService extends Service {
 
     @Override
     public void onDestroy() {
-
         running = false;
 
         if (worker != null) {
@@ -209,10 +196,7 @@ public class NotifyService extends Service {
         return null;
     }
 
-    // =========================================
-    // THREE SECOND POLLING
-    // =========================================
-
+    // প্রতি ৩ সেকেন্ডে সার্ভার পরীক্ষা
     private void pollingLoop() {
 
         SSLSocketFactory factory = null;
@@ -223,9 +207,7 @@ public class NotifyService extends Service {
         }
 
         while (running) {
-
             try {
-
                 String cookie = null;
 
                 try {
@@ -235,13 +217,11 @@ public class NotifyService extends Service {
                 }
 
                 if (cookie != null && !cookie.isEmpty()) {
-
                     Response response =
                             pollServer(factory, cookie);
 
                     if (response.code == 200
                             && response.body != null) {
-
                         handleResponse(
                                 new JSONObject(response.body)
                         );
@@ -256,11 +236,7 @@ public class NotifyService extends Service {
             }
 
             try {
-
-                Thread.sleep(
-                        AppConfig.POLL_INTERVAL_MS
-                );
-
+                Thread.sleep(AppConfig.POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
                 break;
             }
@@ -272,10 +248,7 @@ public class NotifyService extends Service {
         String body;
     }
 
-    // =========================================
-    // CONNECT TO LOCAL SERVER
-    // =========================================
-
+    // লোকাল সার্ভারের সঙ্গে সংযোগ
     private Response pollServer(
             SSLSocketFactory factory,
             String cookie
@@ -289,13 +262,11 @@ public class NotifyService extends Service {
                 .append(AppConfig.LONG_POLL_SECONDS);
 
         if (cursor >= 0) {
-
             url.append("&after=")
                     .append(cursor);
         }
 
         if (!knownCalls.isEmpty()) {
-
             url.append("&calls=")
                     .append(URLEncoder.encode(
                             android.text.TextUtils.join(
@@ -311,7 +282,6 @@ public class NotifyService extends Service {
                         new URL(url.toString()).openConnection();
 
         try {
-
             if (factory != null) {
                 connection.setSSLSocketFactory(factory);
             }
@@ -325,11 +295,7 @@ public class NotifyService extends Service {
             connection.setConnectTimeout(8000);
             connection.setReadTimeout(15000);
 
-            connection.setRequestProperty(
-                    "Cookie",
-                    cookie
-            );
-
+            connection.setRequestProperty("Cookie", cookie);
             connection.setRequestProperty(
                     "Accept",
                     "application/json"
@@ -338,12 +304,9 @@ public class NotifyService extends Service {
             connection.setUseCaches(false);
 
             Response response = new Response();
-
-            response.code =
-                    connection.getResponseCode();
+            response.code = connection.getResponseCode();
 
             if (response.code == 200) {
-
                 try (InputStream input =
                              connection.getInputStream()) {
 
@@ -351,34 +314,25 @@ public class NotifyService extends Service {
                             new ByteArrayOutputStream();
 
                     byte[] buffer = new byte[4096];
-
                     int length;
 
-                    while (
-                            (length = input.read(buffer)) > 0
-                                    && output.size() < 512 * 1024
-                    ) {
-
+                    while ((length = input.read(buffer)) > 0
+                            && output.size() < 512 * 1024) {
                         output.write(buffer, 0, length);
                     }
 
-                    response.body =
-                            output.toString("UTF-8");
+                    response.body = output.toString("UTF-8");
                 }
             }
 
             return response;
 
         } finally {
-
             connection.disconnect();
         }
     }
 
-    // =========================================
-    // PROCESS NEW EVENTS
-    // =========================================
-
+    // নতুন কল ও মেসেজ শনাক্ত
     private void handleResponse(JSONObject json) {
 
         if (!json.optBoolean("success")) {
@@ -390,18 +344,14 @@ public class NotifyService extends Service {
         String eventTitle = null;
         String eventText = null;
 
-        // Incoming calls
-
         JSONArray calls = json.optJSONArray("calls");
 
         Set<String> currentCalls = new HashSet<>();
 
         if (calls != null) {
-
             for (int i = 0; i < calls.length(); i++) {
 
-                JSONObject call =
-                        calls.optJSONObject(i);
+                JSONObject call = calls.optJSONObject(i);
 
                 if (call == null) {
                     continue;
@@ -416,7 +366,6 @@ public class NotifyService extends Service {
                 currentCalls.add(id);
 
                 if (!knownCalls.contains(id)) {
-
                     newEvents++;
 
                     eventTitle = call.optString(
@@ -424,10 +373,9 @@ public class NotifyService extends Service {
                             "AshPlay"
                     );
 
-                    boolean video =
-                            "video".equals(
-                                    call.optString("type")
-                            );
+                    boolean video = "video".equals(
+                            call.optString("type")
+                    );
 
                     eventText = video
                             ? "আপনাকে ভিডিও কল করেছেন"
@@ -439,13 +387,19 @@ public class NotifyService extends Service {
         knownCalls.clear();
         knownCalls.addAll(currentCalls);
 
-        // Incoming messages
+        // সার্ভিস বন্ধ হলেও কল ID মনে রাখবে
+        prefs.edit()
+                .putString(
+                        "known_calls",
+                        android.text.TextUtils.join(",", knownCalls)
+                )
+                .apply();
 
+        // নতুন মেসেজ
         JSONArray messages =
                 json.optJSONArray("messages");
 
         if (messages != null) {
-
             for (int i = 0; i < messages.length(); i++) {
 
                 JSONObject message =
@@ -469,24 +423,19 @@ public class NotifyService extends Service {
             }
         }
 
-        // Update badge
-
         if (newEvents > 0 && !appVisible) {
 
             final int count = newEvents;
-
             final String title = eventTitle;
             final String body = eventText;
 
             main.post(() -> {
-
                 badgeCount += count;
 
                 latestTitle = title;
                 latestText = body;
 
                 saveBadgeCount();
-
                 showBadgeNotification();
             });
         }
@@ -498,21 +447,13 @@ public class NotifyService extends Service {
                 .apply();
     }
 
-    // =========================================
-    // SAVE BADGE COUNT
-    // =========================================
-
     private void saveBadgeCount() {
-
         prefs.edit()
                 .putInt("badge_count", badgeCount)
                 .apply();
     }
 
-    // =========================================
-    // SHOW APP ICON BADGE
-    // =========================================
-
+    // অ্যাপ আইকনের ব্যাজ
     private void showBadgeNotification() {
 
         if (appVisible || badgeCount <= 0) {
@@ -544,71 +485,45 @@ public class NotifyService extends Service {
                         this,
                         CH_ALERT
                 )
-
-                        .setSmallIcon(
-                                R.drawable.ic_notification
-                        )
-
+                        .setSmallIcon(R.drawable.ic_notification)
                         .setContentTitle(latestTitle)
-
                         .setContentText(latestText)
-
                         .setNumber(badgeCount)
-
                         .setBadgeIconType(
                                 NotificationCompat.BADGE_ICON_SMALL
                         )
-
                         .setCategory(
                                 NotificationCompat.CATEGORY_MESSAGE
                         )
-
                         .setPriority(
                                 NotificationCompat.PRIORITY_DEFAULT
                         )
-
                         .setSilent(true)
-
                         .setOnlyAlertOnce(true)
-
                         .setAutoCancel(false)
-
                         .setShowWhen(true)
-
                         .setContentIntent(pendingIntent)
-
                         .build();
 
         try {
-
             nm.notify(ID_ALERT, notification);
-
         } catch (Exception ignored) {
         }
     }
 
-    // =========================================
-    // CLEAR BADGE WHEN APP OPENS
-    // =========================================
-
+    // অ্যাপ খুললে ব্যাজ মুছে যাবে
     private void clearAllAlerts() {
 
         badgeCount = 0;
-
         saveBadgeCount();
 
         try {
-
             nm.cancel(ID_ALERT);
-
         } catch (Exception ignored) {
         }
     }
 
-    // =========================================
-    // NOTIFICATION CHANNELS
-    // =========================================
-
+    // নীরব নোটিফিকেশন চ্যানেল
     private void createChannels() {
 
         if (Build.VERSION.SDK_INT < 26) {
@@ -660,10 +575,7 @@ public class NotifyService extends Service {
         nm.createNotificationChannel(alert);
     }
 
-    // =========================================
-    // FOREGROUND SERVICE NOTIFICATION
-    // =========================================
-
+    // Foreground service-এর নীরব নোটিফিকেশন
     private Notification buildForegroundNotification() {
 
         Intent open = new Intent(
@@ -689,36 +601,22 @@ public class NotifyService extends Service {
                 this,
                 CH_SERVICE
         )
-
-                .setSmallIcon(
-                        R.drawable.ic_notification
-                )
-
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("AshPlay")
-
                 .setContentText(
                         "নীরব নোটিফিকেশন সংযোগ চালু"
                 )
-
                 .setPriority(
                         NotificationCompat.PRIORITY_MIN
                 )
-
                 .setSilent(true)
-
                 .setOngoing(true)
-
                 .setShowWhen(false)
-
                 .setContentIntent(pi)
-
                 .build();
     }
 
-    // =========================================
-    // LOCAL HTTPS CERTIFICATE
-    // =========================================
-
+    // লোকাল HTTPS সার্টিফিকেট যাচাই
     private SSLSocketFactory buildSocketFactory()
             throws Exception {
 
@@ -731,20 +629,14 @@ public class NotifyService extends Service {
 
         X509TrustManager defaultManager = null;
 
-        for (TrustManager manager :
-                tmf.getTrustManagers()) {
-
+        for (TrustManager manager : tmf.getTrustManagers()) {
             if (manager instanceof X509TrustManager) {
-
-                defaultManager =
-                        (X509TrustManager) manager;
-
+                defaultManager = (X509TrustManager) manager;
                 break;
             }
         }
 
-        final X509TrustManager base =
-                defaultManager;
+        final X509TrustManager base = defaultManager;
 
         final SharedPreferences trust =
                 getSharedPreferences(
@@ -760,7 +652,6 @@ public class NotifyService extends Service {
                             X509Certificate[] chain,
                             String authType
                     ) throws CertificateException {
-
                         throw new CertificateException(
                                 "Client certificates not supported"
                         );
@@ -773,9 +664,7 @@ public class NotifyService extends Service {
                     ) throws CertificateException {
 
                         try {
-
                             if (base == null) {
-
                                 throw new CertificateException(
                                         "No default trust manager"
                                 );
@@ -788,24 +677,19 @@ public class NotifyService extends Service {
 
                         } catch (CertificateException e) {
 
-                            String saved =
-                                    trust.getString(
-                                            AppConfig.WEBSITE_HOST,
-                                            null
-                                    );
+                            String saved = trust.getString(
+                                    AppConfig.WEBSITE_HOST,
+                                    null
+                            );
 
                             String current =
-                                    chain != null
-                                            && chain.length > 0
+                                    chain != null && chain.length > 0
                                             ? fingerprint(chain[0])
                                             : null;
 
-                            if (
-                                    saved == null
-                                            || current == null
-                                            || !saved.equalsIgnoreCase(current)
-                            ) {
-
+                            if (saved == null
+                                    || current == null
+                                    || !saved.equalsIgnoreCase(current)) {
                                 throw e;
                             }
                         }
@@ -813,15 +697,13 @@ public class NotifyService extends Service {
 
                     @Override
                     public X509Certificate[] getAcceptedIssuers() {
-
                         return base == null
                                 ? new X509Certificate[0]
                                 : base.getAcceptedIssuers();
                     }
                 };
 
-        SSLContext context =
-                SSLContext.getInstance("TLS");
+        SSLContext context = SSLContext.getInstance("TLS");
 
         context.init(
                 null,
@@ -835,18 +717,14 @@ public class NotifyService extends Service {
     private static String fingerprint(
             X509Certificate certificate
     ) {
-
         try {
-
             byte[] digest =
                     MessageDigest.getInstance("SHA-256")
                             .digest(certificate.getEncoded());
 
-            StringBuilder result =
-                    new StringBuilder();
+            StringBuilder result = new StringBuilder();
 
             for (byte b : digest) {
-
                 result.append(
                         String.format(
                                 Locale.US,
@@ -859,7 +737,6 @@ public class NotifyService extends Service {
             return result.toString();
 
         } catch (Exception e) {
-
             return null;
         }
     }
