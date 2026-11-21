@@ -1,4 +1,3 @@
-
 package com.ashplay
 
 import android.app.Activity
@@ -26,6 +25,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.FastForward
@@ -33,6 +34,8 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
@@ -54,6 +57,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -320,6 +327,23 @@ private fun AshPlayApp() {
         mutableStateOf("")
     }
 
+    var showSearchScreen by remember {
+        mutableStateOf(false)
+    }
+
+    val context = LocalContext.current
+    val searchPrefs = remember {
+        context.getSharedPreferences("ashplay_search_history", android.content.Context.MODE_PRIVATE)
+    }
+    var searchHistory by remember {
+        mutableStateOf(
+            try {
+                val saved = org.json.JSONArray(searchPrefs.getString("items_json", "[]"))
+                List(saved.length()) { index -> saved.optString(index) }.filter { it.isNotBlank() }
+            } catch (_: Exception) { emptyList() }
+        )
+    }
+
     var onlineCount by remember {
         mutableIntStateOf(0)
     }
@@ -501,6 +525,26 @@ private fun AshPlayApp() {
         }
     }
 
+    fun saveSearchHistory(value: String) {
+        val cleaned = value.trim()
+        if (cleaned.isBlank()) return
+        val updated = (listOf(cleaned) + searchHistory.filterNot { it.equals(cleaned, ignoreCase = true) })
+            .take(30)
+        searchHistory = updated
+        searchPrefs.edit().putString("items_json", org.json.JSONArray(updated).toString()).apply()
+    }
+
+    fun applySearch(value: String) {
+        query = value
+        if (value.isNotBlank()) saveSearchHistory(value)
+        selectedTab = BottomTab.HOME
+        showSearchScreen = false
+    }
+
+    BackHandler(enabled = showSearchScreen) {
+        showSearchScreen = false
+    }
+
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = Orange,
@@ -534,6 +578,19 @@ private fun AshPlayApp() {
                     }
                 )
 
+            } else if (showSearchScreen) {
+
+                SearchScreen(
+                    initialQuery = query,
+                    history = searchHistory,
+                    onBack = { showSearchScreen = false },
+                    onSearch = { applySearch(it) },
+                    onClearHistory = {
+                        searchHistory = emptyList()
+                        searchPrefs.edit().remove("items_json").apply()
+                    }
+                )
+
             } else {
 
                 Column(Modifier.fillMaxSize()) {
@@ -544,9 +601,8 @@ private fun AshPlayApp() {
                     )
 
                     SearchBar(
-                        query,
-                        { query = it },
-                        { }
+                        query = query,
+                        onClick = { showSearchScreen = true }
                     )
 
                     when {
@@ -783,91 +839,186 @@ private fun AshPlayHeader(
 }
 
 // ==========================================
-// SEARCH BAR
+// SEARCH BAR + DEDICATED SEARCH SCREEN
 // ==========================================
 
 @Composable
 private fun SearchBar(
     query: String,
-    onQuery: (String) -> Unit,
-    onSearch: () -> Unit
+    onClick: () -> Unit
 ) {
-
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(
-                start = 16.dp,
-                end = 16.dp,
-                top = 7.dp,
-                bottom = 12.dp
-            ),
+            .padding(start = 16.dp, end = 16.dp, top = 7.dp, bottom = 12.dp)
+            .height(54.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Panel)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Icon(
+            Icons.Default.Search,
+            contentDescription = "Search",
+            tint = Color(0xFFB8C3D4),
+            modifier = Modifier.size(25.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = query.ifBlank { "Search videos..." },
+            color = if (query.isBlank()) Color(0xFF8E9AAF) else Color.White,
+            fontSize = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
 
+@Composable
+private fun SearchScreen(
+    initialQuery: String,
+    history: List<String>,
+    onBack: () -> Unit,
+    onSearch: (String) -> Unit,
+    onClearHistory: () -> Unit
+) {
+    var text by remember { mutableStateOf(initialQuery) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(180)
+        try { focusRequester.requestFocus() } catch (_: Exception) { }
+        keyboard?.show()
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+    ) {
         Row(
             Modifier
-                .weight(1f)
-                .height(54.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Panel)
-                .padding(horizontal = 14.dp),
+                .fillMaxWidth()
+                .padding(start = 10.dp, end = 16.dp, top = 12.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-
-            Icon(
-                Icons.Default.Search,
-                null,
-                tint = Color(0xFFB8C3D4),
-                modifier = Modifier.size(25.dp)
-            )
-
-            Spacer(Modifier.width(12.dp))
-
-            Box(Modifier.weight(1f)) {
-
-                if (query.isEmpty()) {
-
-                    Text(
-                        "Search videos...",
-                        color = Color(0xFF8E9AAF),
-                        fontSize = 16.sp
-                    )
-                }
-
+            IconButton(onClick = { keyboard?.hide(); onBack() }) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+            Row(
+                Modifier
+                    .weight(1f)
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xFF242A36))
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 BasicTextField(
-                    value = query,
-                    onValueChange = onQuery,
+                    value = text,
+                    onValueChange = { text = it },
                     singleLine = true,
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = Color.White,
-                        fontSize = 16.sp
+                        fontSize = 17.sp
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { keyboard?.hide(); onSearch(text) }
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester),
+                    decorationBox = { inner ->
+                        Box {
+                            if (text.isEmpty()) {
+                                Text("Search videos...", color = Color(0xFF8E9AAF), fontSize = 17.sp)
+                            }
+                            inner()
+                        }
+                    }
                 )
+                if (text.isNotEmpty()) {
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        onClick = { text = ""; focusRequester.requestFocus(); keyboard?.show() },
+                        shape = CircleShape,
+                        color = Color(0xFF343D50),
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.White, modifier = Modifier.size(21.dp))
+                        }
+                    }
+                }
             }
         }
 
-        Spacer(Modifier.width(10.dp))
+        if (text.isBlank()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 22.dp, end = 18.dp, top = 4.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Recent searches", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                if (history.isNotEmpty()) {
+                    Text(
+                        "Clear",
+                        color = Orange,
+                        fontSize = 13.sp,
+                        modifier = Modifier.clickable(onClick = onClearHistory).padding(6.dp)
+                    )
+                }
+            }
 
-        Surface(
-            onClick = onSearch,
-            modifier = Modifier.size(
-                width = 62.dp,
-                height = 54.dp
-            ),
-            shape = RoundedCornerShape(16.dp),
-            color = Orange
-        ) {
-
-            Box(contentAlignment = Alignment.Center) {
-
-                Icon(
-                    Icons.Default.Search,
-                    null,
-                    tint = Color.White,
-                    modifier = Modifier.size(29.dp)
-                )
+            if (history.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
+                    Text("এখনো কোনো সার্চ করা হয়নি", color = Muted, modifier = Modifier.padding(top = 34.dp))
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(bottom = 20.dp)
+                ) {
+                    items(history, key = { it }) { item ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { keyboard?.hide(); onSearch(item) }
+                                .padding(horizontal = 22.dp, vertical = 15.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = Color(0xFFB8C3D4), modifier = Modifier.size(25.dp))
+                            Spacer(Modifier.width(22.dp))
+                            Text(
+                                item,
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Use search", tint = Color(0xFFB8C3D4), modifier = Modifier.size(21.dp))
+                        }
+                    }
+                }
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { keyboard?.hide(); onSearch(text) }
+                    .padding(horizontal = 22.dp, vertical = 15.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Search, contentDescription = null, tint = Muted, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(20.dp))
+                Text(text, color = Color.White, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
