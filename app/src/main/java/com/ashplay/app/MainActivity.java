@@ -1,6 +1,14 @@
 package com.ashplay.app;
 
 import android.Manifest;
+import android.app.NotificationManager;
+import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
+import android.view.WindowManager;
+import android.webkit.CookieManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ActivityInfo;
@@ -37,8 +45,8 @@ import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String WEBSITE_URL = "https://192.168.168.10";
-    private static final String WEBSITE_HOST = "192.168.168.10";
+    private static final String WEBSITE_URL = AppConfig.WEBSITE_URL;
+    private static final String WEBSITE_HOST = AppConfig.WEBSITE_HOST;
     private static final int MEDIA_PERMISSION_CODE = 501;
 
     private WebView webView;
@@ -63,6 +71,22 @@ public class MainActivity extends AppCompatActivity {
 
     private int previousRequestedOrientation =
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+
+    // ---- ব্যাকগ্রাউন্ড নোটিফিকেশন সেটআপ ----
+    private int setupStep = 0;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private int pendingChatId = -1;
+    private int chatAttempts = 0;
+
+    private final ActivityResultLauncher<String> notifPermissionLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.RequestPermission(),
+                    granted -> setupNext());
+
+    private final ActivityResultLauncher<Intent> settingsLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.StartActivityForResult(),
+                    result -> setupNext());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -249,6 +273,20 @@ public class MainActivity extends AppCompatActivity {
         setContentView(rootLayout);
         webView.loadUrl(WEBSITE_URL);
 
+        // অ্যাপ বন্ধ থাকলেও কল/মেসেজ জানানোর সার্ভিস চালু
+        getSharedPreferences(AppConfig.APP_PREFS, MODE_PRIVATE)
+                .edit().putBoolean("service_wanted", true).apply();
+        NotifyService.start(this);
+
+        Intent launchIntent = getIntent();
+        boolean fromNotification = launchIntent != null
+                && (launchIntent.getBooleanExtra(NotifyService.EXTRA_FROM_CALL, false)
+                || launchIntent.getIntExtra(NotifyService.EXTRA_OPEN_CHAT, -1) > 0);
+        handleNotificationIntent(launchIntent);
+        if (!fromNotification) {
+            rootLayout.post(this::runSetupFlow);
+        }
+
         getOnBackPressedDispatcher().addCallback(
                 this, new OnBackPressedCallback(true) {
 
@@ -263,6 +301,167 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+    }
+
+    // ------------------------------------------------------------------
+    // নোটিফিকেশন থেকে অ্যাপ খুললে: কল হলে লক স্ক্রিনের উপরে দেখানো, মেসেজ হলে সেই চ্যাট খোলা
+    // ------------------------------------------------------------------
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNotificationIntent(intent);
+    }
+
+    private void handleNotificationIntent(Intent intent) {
+        if (intent == null) return;
+
+        if (intent.getBooleanExtra(NotifyService.EXTRA_FROM_CALL, false)) {
+            intent.removeExtra(NotifyService.EXTRA_FROM_CALL);
+            if (Build.VERSION.SDK_INT >= 27) {
+                setShowWhenLocked(true);
+                setTurnScreenOn(true);
+            } else {
+                getWindow().addFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+            }
+        }
+
+        int chatId = intent.getIntExtra(NotifyService.EXTRA_OPEN_CHAT, -1);
+        if (chatId > 0) {
+            intent.removeExtra(NotifyService.EXTRA_OPEN_CHAT);
+            pendingChatId = chatId;
+            chatAttempts = 0;
+            tryOpenPendingChat();
+        }
+    }
+
+    /** পেজ লোড ও লগইন শেষ না হওয়া পর্যন্ত বারবার চেষ্টা করে চ্যাট খোলে (সর্বোচ্চ ~২৪ সেকেন্ড)। */
+    private void tryOpenPendingChat() {
+        final int id = pendingChatId;
+        if (id <= 0 || webView == null) return;
+        if (chatAttempts++ > 40) { pendingChatId = -1; return; }
+
+        String js = "(function(){try{"
+                + "if(typeof me!=='undefined'&&me&&typeof openChat==='function'&&typeof closeAll==='function'&&typeof switchTab==='function'){"
+                + "if(typeof chatWith!=='undefined'&&chatWith===" + id + "&&document.getElementById('pgChat')&&typeof stack!=='undefined'&&stack.some(function(s){return s.id==='pgChat';}))return 'ok';"
+                + "closeAll(function(){switchTab('vUsers');openChat(" + id + ");});return 'ok';}"
+                + "}catch(e){}return 'wait';})()";
+
+        webView.evaluateJavascript(js, value -> {
+            if (value != null && value.contains("ok")) {
+                pendingChatId = -1;
+            } else {
+                uiHandler.postDelayed(this::tryOpenPendingChat, 600);
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // প্রথমবার চালুর সময় ধাপে ধাপে অনুমতি: নোটিফিকেশন → ব্যাটারি → ফুল-স্ক্রিন কল → ফোনের Autostart
+    // ------------------------------------------------------------------
+
+    private void runSetupFlow() {
+        setupStep = 0;
+        setupNext();
+    }
+
+    private void setupNext() {
+        setupStep++;
+        SharedPreferences p = getSharedPreferences(AppConfig.APP_PREFS, MODE_PRIVATE);
+        try {
+            switch (setupStep) {
+                case 1:
+                    if (Build.VERSION.SDK_INT >= 33
+                            && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                            != PackageManager.PERMISSION_GRANTED) {
+                        notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+                        return;
+                    }
+                    setupNext();
+                    return;
+
+                case 2: {
+                    PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                    if (Build.VERSION.SDK_INT >= 23 && pm != null
+                            && !pm.isIgnoringBatteryOptimizations(getPackageName())
+                            && !p.getBoolean("ask_battery", false)) {
+                        p.edit().putBoolean("ask_battery", true).apply();
+                        askDialog("অ্যাপ বন্ধ থাকলেও কল ও মেসেজ পেতে ব্যাটারি সীমাবদ্ধতা থেকে AshPlay-কে বাদ দিতে হবে। পরের স্ক্রিনে \"Allow\" চাপুন।",
+                                "ঠিক আছে", () -> {
+                                    Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:" + getPackageName()));
+                                    try { settingsLauncher.launch(i); } catch (Exception e) { setupNext(); }
+                                }, this::setupNext);
+                        return;
+                    }
+                    setupNext();
+                    return;
+                }
+
+                case 3: {
+                    NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                    if (Build.VERSION.SDK_INT >= 34 && nm != null && !nm.canUseFullScreenIntent()
+                            && !p.getBoolean("ask_fsi", false)) {
+                        p.edit().putBoolean("ask_fsi", true).apply();
+                        askDialog("ফোন লক থাকলেও কল এলে পুরো স্ক্রিনে দেখাতে অনুমতি দিন।",
+                                "অনুমতি দিন", () -> {
+                                    Intent i = new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                            Uri.parse("package:" + getPackageName()));
+                                    try { settingsLauncher.launch(i); } catch (Exception e) { setupNext(); }
+                                }, this::setupNext);
+                        return;
+                    }
+                    setupNext();
+                    return;
+                }
+
+                case 4:
+                    if (Build.VERSION.SDK_INT >= 26 && !p.getBoolean("ask_hide", false)) {
+                        p.edit().putBoolean("ask_hide", true).apply();
+                        askDialog("অ্যান্ড্রয়েড নিয়ম অনুযায়ী ব্যাকগ্রাউন্ড সার্ভিসের একটা ছোট নোটিফিকেশন থাকে। এটা লুকাতে পরের স্ক্রিনে \"সংযোগ\" নোটিফিকেশন বন্ধ (off) করে দিন। "
+                                        + "কল ও মেসেজের নোটিফিকেশন আলাদা, সেগুলো বন্ধ হবে না।",
+                                "লুকিয়ে ফেলুন", () -> {
+                                    Intent i = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                                            .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
+                                            .putExtra(Settings.EXTRA_CHANNEL_ID, NotifyService.CH_SERVICE);
+                                    try { settingsLauncher.launch(i); } catch (Exception e) { setupNext(); }
+                                }, this::setupNext);
+                        return;
+                    }
+                    setupNext();
+                    return;
+
+                case 5:
+                    if (!p.getBoolean("ask_oem", false)) {
+                        p.edit().putBoolean("ask_oem", true).apply();
+                        askDialog("কিছু ফোনে (Xiaomi, Oppo, Vivo, Realme, Samsung, Tecno, Infinix ইত্যাদি) অ্যাপ বন্ধ থাকলে সিস্টেম সার্ভিস মেরে ফেলে। "
+                                        + "Settings → Apps → AshPlay-তে গিয়ে \"Autostart\" চালু করুন এবং Battery → \"No restrictions\" দিন।",
+                                "Settings খুলুন", () -> {
+                                    Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            Uri.parse("package:" + getPackageName()));
+                                    try { startActivity(i); } catch (Exception ignored) {}
+                                }, null);
+                    }
+                    return;
+
+                default:
+                    return;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void askDialog(String message, String yesLabel, Runnable onYes, Runnable onNo) {
+        if (isFinishing()) return;
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setMessage(message)
+                .setCancelable(false)
+                .setPositiveButton(yesLabel, (d, w) -> { if (onYes != null) onYes.run(); })
+                .setNegativeButton("পরে", (d, w) -> { if (onNo != null) onNo.run(); })
+                .show();
     }
 
     private String getCertificateFingerprint(
@@ -445,7 +644,37 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        NotifyService.appVisible = true;
+        NotifyService.onAppVisible();     // রিং বন্ধ এবং জমে থাকা নোটিফিকেশন মুছে ফেলা
+    }
+
+    @Override
+    protected void onStop() {
+        NotifyService.appVisible = false;
+        // লক স্ক্রিনের উপরে দেখানোর বিশেষ অবস্থা শুধু কলের সময়ের জন্য
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(false);
+            setTurnScreenOn(false);
+        } else {
+            getWindow().clearFlags(
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                            | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        }
+        super.onStop();
+    }
+
+    @Override
+    protected void onPause() {
+        // লগইন কুকি ডিস্কে সেভ — সার্ভিস ও রিস্টার্টের পরেও সেশন পায়
+        try { CookieManager.getInstance().flush(); } catch (Exception ignored) {}
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
+        uiHandler.removeCallbacksAndMessages(null);
 
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(null);
