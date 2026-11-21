@@ -5,10 +5,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="true"
         android:label="AshPlay"
+        android:icon="@drawable/ashplay_logo"
+        android:roundIcon="@drawable/ashplay_logo"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
