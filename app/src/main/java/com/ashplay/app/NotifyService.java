@@ -25,6 +25,7 @@ import android.os.Vibrator;
 import android.webkit.CookieManager;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.Person;
 import androidx.core.app.ServiceCompat;
 import androidx.core.content.ContextCompat;
 
@@ -33,6 +34,7 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.security.KeyStore;
@@ -70,6 +72,11 @@ public class NotifyService extends Service {
 
     public static final String EXTRA_FROM_CALL = "from_call";
     public static final String EXTRA_OPEN_CHAT = "open_chat";
+    /** সবুজ "উত্তর" বাটনে চাপলে MainActivity-কে জানায় কোন কলটা ধরতে হবে। */
+    public static final String EXTRA_ACCEPT_CALL_ID = "accept_call_id";
+    /** লাল "কাটুন" বাটনে চাপলে সার্ভিসকে পাঠানো অ্যাকশন। */
+    public static final String ACTION_DECLINE_CALL = "com.ashplay.app.DECLINE_CALL";
+    public static final String EXTRA_CALL_ID = "call_id";
 
     /** MainActivity দৃশ্যমান থাকলে true — তখন ওয়েবপেজ নিজেই কল/মেসেজ দেখায়, তাই সার্ভিস চুপ থাকে। */
     public static volatile boolean appVisible = false;
@@ -133,6 +140,9 @@ public class NotifyService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_DECLINE_CALL.equals(intent.getAction())) {
+            declineCall(intent.getStringExtra(EXTRA_CALL_ID));
+        }
         if (!running) {
             running = true;
             worker = new Thread(this::loop, "ashplay-notify");
@@ -326,6 +336,10 @@ public class NotifyService extends Service {
         ringing = true;
         ringingCallId = id;
 
+        final String safeId = id.replaceAll("[^a-f0-9]", "");
+        final int fromId = call.optInt("from", -1);
+
+        // নোটিফিকেশনে ট্যাপ বা লক স্ক্রিনে ফুল-স্ক্রিন: শুধু অ্যাপ খোলে
         Intent open = new Intent(this, MainActivity.class)
                 .setAction("com.ashplay.app.INCOMING_CALL")
                 .putExtra(EXTRA_FROM_CALL, true)
@@ -333,10 +347,32 @@ public class NotifyService extends Service {
         PendingIntent pi = PendingIntent.getActivity(this, 11, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
+        // সবুজ বাটন: অ্যাপ খুলে কলারের চ্যাট ওপেন করে কল রিসিভ
+        Intent accept = new Intent(this, MainActivity.class)
+                .setAction("com.ashplay.app.ACCEPT_CALL")
+                .putExtra(EXTRA_FROM_CALL, true)
+                .putExtra(EXTRA_OPEN_CHAT, fromId)
+                .putExtra(EXTRA_ACCEPT_CALL_ID, safeId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent acceptPi = PendingIntent.getActivity(this, 12, accept,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        // লাল বাটন: অ্যাপ না খুলে সরাসরি কল কেটে দেয়
+        Intent decline = new Intent(this, NotifyService.class)
+                .setAction(ACTION_DECLINE_CALL)
+                .putExtra(EXTRA_CALL_ID, safeId);
+        PendingIntent declinePi = PendingIntent.getService(this, 13, decline,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Person caller = new Person.Builder().setName(name).setImportant(true).build();
+
+        // CallStyle: অ্যান্ড্রয়েড নিজেই সবুজ "Answer" ও লাল "Decline" বাটন দেখায়
         Notification n = new NotificationCompat.Builder(this, CH_CALL)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(name)
                 .setContentText(video ? "ইনকামিং ভিডিও কল" : "ইনকামিং অডিও কল")
+                .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePi, acceptPi))
+                .addPerson(caller)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -344,7 +380,6 @@ public class NotifyService extends Service {
                 .setAutoCancel(true)
                 .setContentIntent(pi)
                 .setFullScreenIntent(pi, true)
-                .addAction(R.drawable.ic_notification, "উত্তর দিন", pi)
                 .setTimeoutAfter(left * 1000L)
                 .build();
         try { nm.notify(ID_CALL, n); } catch (Exception ignored) {}
@@ -392,6 +427,82 @@ public class NotifyService extends Service {
     private void stopRingAndCancel() {
         stopRing();
         try { nm.cancel(ID_CALL); } catch (Exception ignored) {}
+    }
+
+    // ---------------------------------------------------------------- decline (লাল বাটন)
+
+    /** রিং বন্ধ করে নোটিফিকেশন সরায়, তারপর ব্যাকগ্রাউন্ডে সার্ভারকে "decline" জানায়। অ্যাপ খোলে না। */
+    private void declineCall(String callId) {
+        stopRingAndCancel();
+        final String id = callId == null ? "" : callId.replaceAll("[^a-f0-9]", "");
+        if (id.isEmpty()) return;
+        Thread t = new Thread(() -> {
+            // নেটওয়ার্ক ঝাপসা থাকলে কয়েকবার চেষ্টা
+            for (int i = 0; i < 3; i++) {
+                try {
+                    if (sendDecline(id)) return;
+                } catch (Exception ignored) {}
+                try { Thread.sleep(700); } catch (InterruptedException e) { return; }
+            }
+        }, "ashplay-decline");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private boolean sendDecline(String id) throws Exception {
+        String cookie = CookieManager.getInstance().getCookie(AppConfig.WEBSITE_URL);
+        if (cookie == null || cookie.isEmpty()) return true;      // লগইন নেই, কিছু করার নেই
+        SSLSocketFactory factory = null;
+        try { factory = buildSocketFactory(); } catch (Exception ignored) {}
+
+        // ১) সেশনের CSRF টোকেন আনা
+        String csrf = "";
+        HttpsURLConnection a = open(AppConfig.WEBSITE_URL + "/user_api.php?a=me", factory, cookie);
+        try {
+            if (a.getResponseCode() != 200) return false;
+            try (InputStream in = a.getInputStream()) {
+                csrf = new JSONObject(readAll(in)).optString("csrf", "");
+            }
+        } finally {
+            a.disconnect();
+        }
+        if (csrf.isEmpty()) return false;
+
+        // ২) calls.php-তে decline পাঠানো
+        HttpsURLConnection b = open(AppConfig.WEBSITE_URL + "/calls.php", factory, cookie);
+        try {
+            b.setRequestMethod("POST");
+            b.setDoOutput(true);
+            b.setRequestProperty("X-CSRF", csrf);
+            b.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+            byte[] data = ("a=decline&id=" + URLEncoder.encode(id, "UTF-8")).getBytes("UTF-8");
+            try (OutputStream os = b.getOutputStream()) { os.write(data); }
+            int code = b.getResponseCode();
+            // 404 = কল আগেই শেষ হয়ে গেছে, সেটাও সফল ধরা হয়
+            return code == 200 || code == 404;
+        } finally {
+            b.disconnect();
+        }
+    }
+
+    private HttpsURLConnection open(String url, SSLSocketFactory factory, String cookie) throws Exception {
+        HttpsURLConnection c = (HttpsURLConnection) new URL(url).openConnection();
+        if (factory != null) c.setSSLSocketFactory(factory);
+        c.setHostnameVerifier((host, session) -> AppConfig.WEBSITE_HOST.equalsIgnoreCase(host));
+        c.setConnectTimeout(8000);
+        c.setReadTimeout(10000);
+        c.setRequestProperty("Cookie", cookie);
+        c.setRequestProperty("Accept", "application/json");
+        c.setUseCaches(false);
+        return c;
+    }
+
+    private static String readAll(InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = in.read(buf)) > 0 && out.size() < 512 * 1024) out.write(buf, 0, n);
+        return out.toString("UTF-8");
     }
 
     // ---------------------------------------------------------------- messages
