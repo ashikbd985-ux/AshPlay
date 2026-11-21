@@ -94,6 +94,20 @@ function thumbnailFileName($relative, $videoFile) {
     return hash('sha256', str_replace('\\', '/', $relative) . ':' . $signature) . '.jpg';
 }
 
+// Video URL served through this API so Android ExoPlayer can use HTTP Range.
+function videoUrl($relative) {
+    $scheme = (
+        !empty($_SERVER['HTTPS']) &&
+        $_SERVER['HTTPS'] !== 'off'
+    ) ? 'https' : 'http';
+
+    $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
+    $script = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/ashplay-api.php';
+
+    return $scheme . '://' . $host . $script .
+        '?action=video&path=' . rawurlencode($relative);
+}
+
 // Thumbnail URL
 function thumbnailUrl($relative) {
     $scheme = (
@@ -108,6 +122,145 @@ function thumbnailUrl($relative) {
 }
 
 $action = isset($_GET['action']) ? (string)$_GET['action'] : '';
+
+
+// ==========================================
+// 0. VIDEO STREAMING WITH HTTP BYTE RANGES
+// ==========================================
+
+if ($action === 'video') {
+    $relative = isset($_GET['path']) ? $_GET['path'] : '';
+    $videoFile = resolveVideoPath($root, $relative, $allowed);
+
+    if ($videoFile === false) {
+        http_response_code(404);
+        exit;
+    }
+
+    $fileSize = @filesize($videoFile);
+    if ($fileSize === false || $fileSize < 1) {
+        http_response_code(404);
+        exit;
+    }
+
+    $extension = strtolower(pathinfo($videoFile, PATHINFO_EXTENSION));
+    $mimeTypes = array(
+        'mp4' => 'video/mp4',
+        'm4v' => 'video/x-m4v',
+        'mkv' => 'video/x-matroska',
+        'webm' => 'video/webm',
+        'avi' => 'video/x-msvideo',
+        'mov' => 'video/quicktime',
+        '3gp' => 'video/3gpp',
+        'mpeg' => 'video/mpeg',
+        'mpg' => 'video/mpeg'
+    );
+
+    $start = 0;
+    $end = $fileSize - 1;
+
+    header('Content-Type: ' . (isset($mimeTypes[$extension]) ? $mimeTypes[$extension] : 'application/octet-stream'));
+    header('Accept-Ranges: bytes');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('Pragma: no-cache');
+
+    if (isset($_SERVER['HTTP_RANGE'])) {
+        $rangeHeader = trim($_SERVER['HTTP_RANGE']);
+
+        // This endpoint supports one standard byte range per request.
+        if (!preg_match('/^bytes=(\d*)-(\d*)$/', $rangeHeader, $matches)) {
+            http_response_code(416);
+            header('Content-Range: bytes */' . $fileSize);
+            exit;
+        }
+
+        if ($matches[1] === '' && $matches[2] === '') {
+            http_response_code(416);
+            header('Content-Range: bytes */' . $fileSize);
+            exit;
+        }
+
+        if ($matches[1] === '') {
+            // Suffix range: bytes=-N
+            $suffixLength = (int)$matches[2];
+
+            if ($suffixLength <= 0) {
+                http_response_code(416);
+                header('Content-Range: bytes */' . $fileSize);
+                exit;
+            }
+
+            $start = max(0, $fileSize - $suffixLength);
+
+        } else {
+            $start = (int)$matches[1];
+
+            if ($matches[2] !== '') {
+                $end = (int)$matches[2];
+            }
+        }
+
+        if ($start >= $fileSize || $start > $end) {
+            http_response_code(416);
+            header('Content-Range: bytes */' . $fileSize);
+            exit;
+        }
+
+        $end = min($end, $fileSize - 1);
+
+        http_response_code(206);
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . $fileSize);
+    }
+
+    $contentLength = $end - $start + 1;
+    header('Content-Length: ' . $contentLength);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'HEAD') {
+        exit;
+    }
+
+    @ini_set('zlib.output_compression', 'Off');
+
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+
+    $handle = @fopen($videoFile, 'rb');
+
+    if ($handle === false) {
+        http_response_code(500);
+        exit;
+    }
+
+    if (fseek($handle, $start) !== 0) {
+        fclose($handle);
+        http_response_code(500);
+        exit;
+    }
+
+    $remaining = $contentLength;
+
+    while ($remaining > 0 && !feof($handle)) {
+        $chunkSize = min(65536, $remaining);
+        $chunk = fread($handle, $chunkSize);
+
+        if ($chunk === false || $chunk === '') {
+            break;
+        }
+
+        echo $chunk;
+        $remaining -= strlen($chunk);
+        flush();
+
+        if (connection_aborted()) {
+            break;
+        }
+    }
+
+    fclose($handle);
+    exit;
+}
 
 
 // ==========================================
@@ -346,15 +499,10 @@ function scanVideos($folder, $root, $allowed) {
             substr($real, strlen($root) + 1)
         );
 
-        $urlPath = implode(
-            '/',
-            array_map('rawurlencode', explode('/', $relative))
-        );
-
         $videos[] = array(
             'name' => $file->getBasename(),
             'path' => $relative,
-            'url' => 'http://' . $_SERVER['HTTP_HOST'] . '/' . $urlPath,
+            'url' => videoUrl($relative),
             'size' => $file->getSize(),
             'thumbnail_url' => thumbnailUrl($relative)
         );
@@ -419,7 +567,7 @@ try {
         $rootVideos[] = array(
             'name' => $relative,
             'path' => $relative,
-            'url' => 'http://' . $_SERVER['HTTP_HOST'] . '/' . rawurlencode($relative),
+            'url' => videoUrl($relative),
             'size' => $entry->getSize(),
             'thumbnail_url' => thumbnailUrl($relative)
         );
