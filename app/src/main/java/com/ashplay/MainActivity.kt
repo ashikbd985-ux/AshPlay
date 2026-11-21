@@ -1,17 +1,25 @@
 
 package com.ashplay
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.TrafficStats
 import android.os.Bundle
 import android.os.Process
+import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,10 +27,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -41,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -55,6 +76,7 @@ import java.io.DataOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import kotlin.math.roundToInt
 
 private const val API_URL = "http://192.168.168.10/ashplay-api.php"
 
@@ -120,7 +142,6 @@ enum class BottomTab {
 // THUMBNAIL FUNCTIONS
 // ==========================================
 
-// সার্ভারে আগে থেকে থাকা থাম্বনেইল ডাউনলোড
 private fun downloadServerThumbnail(url: String): Bitmap? {
     if (url.isBlank()) return null
 
@@ -148,7 +169,6 @@ private fun downloadServerThumbnail(url: String): Bitmap? {
     }
 }
 
-// ভিডিও থেকে একটি ফ্রেম তৈরি
 private fun createVideoThumbnail(videoUrl: String): Bitmap? {
     val retriever = MediaMetadataRetriever()
 
@@ -169,7 +189,6 @@ private fun createVideoThumbnail(videoUrl: String): Bitmap? {
     }
 }
 
-// তৈরি করা JPEG থাম্বনেইল PHP সার্ভারে আপলোড
 private fun uploadThumbnail(
     apiUrl: String,
     videoPath: String,
@@ -235,35 +254,34 @@ private fun uploadThumbnail(
     }
 }
 
-// সার্ভার ক্যাশ → না থাকলে তৈরি → আপলোড
 private suspend fun getOrCreateThumbnail(
     video: VideoItem
 ): Bitmap? = withContext(Dispatchers.IO) {
 
-    // প্রথমে সার্ভারের ক্যাশ পরীক্ষা
     val serverBitmap = downloadServerThumbnail(video.thumbnailUrl)
 
     if (serverBitmap != null) {
         return@withContext serverBitmap
     }
 
-    // সার্ভারে না থাকলে ভিডিও থেকে তৈরি
     val newBitmap = createVideoThumbnail(video.url)
         ?: return@withContext null
 
-    // সার্ভারে আপলোড
     uploadThumbnail(
         API_URL,
         video.path,
         newBitmap
     )
 
-    // আপলোড সফল হোক বা না হোক,
-    // বর্তমান সেশনে তৈরি ছবিটি দেখানো হবে
     newBitmap
 }
 
+// ==========================================
+// MAIN ACTIVITY
+// ==========================================
+
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -278,6 +296,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+// ==========================================
+// MAIN APP
+// ==========================================
 
 @Composable
 private fun AshPlayApp() {
@@ -315,6 +337,18 @@ private fun AshPlayApp() {
     }
 
     val scope = rememberCoroutineScope()
+
+    val feed = remember(categories) {
+        categories.flatMap { cat ->
+            cat.videos.map { video ->
+                FeedItem(cat.name, video)
+            }
+        }.shuffled()
+    }
+
+    val allVideos = remember(feed) {
+        feed.map { it.video }
+    }
 
     suspend fun request(url: String): String =
         withContext(Dispatchers.IO) {
@@ -482,8 +516,19 @@ private fun AshPlayApp() {
 
             if (selectedVideo != null) {
 
+                val currentIndex = allVideos.indexOfFirst {
+                    it.path == selectedVideo!!.path
+                }.coerceAtLeast(0)
+
                 VideoPlayerScreen(
-                    selectedVideo!!,
+                    video = selectedVideo!!,
+                    videos = allVideos,
+                    currentIndex = currentIndex,
+                    onVideoChange = { index ->
+                        if (index in allVideos.indices) {
+                            selectedVideo = allVideos[index]
+                        }
+                    },
                     onBack = {
                         selectedVideo = null
                     }
@@ -554,14 +599,6 @@ private fun AshPlayApp() {
                         }
 
                         selectedTab == BottomTab.HOME -> {
-
-                            val feed = remember(categories) {
-                                categories.flatMap { cat ->
-                                    cat.videos.map { video ->
-                                        FeedItem(cat.name, video)
-                                    }
-                                }.shuffled()
-                            }
 
                             val searchQuery =
                                 normalizeForSearch(query)
@@ -652,6 +689,10 @@ private fun AshPlayApp() {
     }
 }
 
+// ==========================================
+// HEADER
+// ==========================================
+
 @Composable
 private fun AshPlayHeader(
     txBytes: Long,
@@ -741,6 +782,10 @@ private fun AshPlayHeader(
     }
 }
 
+// ==========================================
+// SEARCH BAR
+// ==========================================
+
 @Composable
 private fun SearchBar(
     query: String,
@@ -828,6 +873,10 @@ private fun SearchBar(
     }
 }
 
+// ==========================================
+// VIDEO FEED CARD
+// ==========================================
+
 @Composable
 private fun VideoFeedCard(
     item: FeedItem,
@@ -839,7 +888,6 @@ private fun VideoFeedCard(
     }
 
     LaunchedEffect(item.video.path) {
-
         bitmap = getOrCreateThumbnail(item.video)
     }
 
@@ -1021,6 +1069,10 @@ private fun VideoFeedCard(
     }
 }
 
+// ==========================================
+// BOTTOM NAVIGATION
+// ==========================================
+
 @Composable
 private fun BottomNavigation(
     selected: BottomTab,
@@ -1105,6 +1157,10 @@ private fun BottomItem(
     }
 }
 
+// ==========================================
+// EMPTY TAB
+// ==========================================
+
 @Composable
 private fun EmptyTab(
     modifier: Modifier,
@@ -1135,24 +1191,33 @@ private fun EmptyTab(
     }
 }
 
+// ==========================================
+// VIDEO PLAYER SCREEN
+// ==========================================
+
 @Composable
 private fun VideoPlayerScreen(
     video: VideoItem,
+    videos: List<VideoItem>,
+    currentIndex: Int,
+    onVideoChange: (Int) -> Unit,
     onBack: () -> Unit
 ) {
 
     val context = LocalContext.current
+    val activity = context as? Activity
 
-    // সর্বোচ্চ ৫ সেকেন্ড Playback Buffer
-    // এটি Media3-এর সময়ভিত্তিক Buffer নিয়ন্ত্রণ;
-    // নির্দিষ্ট ২ সেকেন্ডের HTTP Chunk নয়।
+    var fullscreen by remember {
+        mutableStateOf(false)
+    }
+
     val loadControl = remember {
         DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                2_000, // Minimum buffer
-                5_000, // Maximum target buffer: 5 seconds
-                2_000, // Initial playback buffer
-                2_000  // Rebuffer playback buffer
+                2_000,
+                5_000,
+                2_000,
+                2_000
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .setBackBuffer(0, false)
@@ -1175,55 +1240,770 @@ private fun VideoPlayerScreen(
             }
     }
 
-    DisposableEffect(player) {
+    var isPlaying by remember(video.url) {
+        mutableStateOf(true)
+    }
 
-        onDispose {
-            player.release()
+    var position by remember(video.url) {
+        mutableLongStateOf(0L)
+    }
+
+    var duration by remember(video.url) {
+        mutableLongStateOf(0L)
+    }
+
+    var volume by remember(video.url) {
+        mutableFloatStateOf(1f)
+    }
+
+    var showControls by remember(video.url) {
+        mutableStateOf(true)
+    }
+
+    var interactionKey by remember(video.url) {
+        mutableIntStateOf(0)
+    }
+
+    var seekFeedback by remember(video.url) {
+        mutableIntStateOf(0)
+    }
+
+    var seekFeedbackKey by remember(video.url) {
+        mutableIntStateOf(0)
+    }
+
+    fun showControlsNow() {
+        showControls = true
+        interactionKey++
+    }
+
+    fun togglePlayback() {
+        if (player.isPlaying) {
+            player.pause()
+            isPlaying = false
+            showControls = true
+            interactionKey++
+        } else {
+            player.play()
+            isPlaying = true
+            showControls = true
+            interactionKey++
         }
     }
 
-    Column(
+    fun seekBy(amount: Long) {
+        val total = player.duration
+            .takeIf { it > 0L }
+            ?: Long.MAX_VALUE
+
+        val newPosition = (player.currentPosition + amount)
+            .coerceIn(0L, total)
+
+        player.seekTo(newPosition)
+        position = newPosition
+    }
+
+    fun changeFullscreen(enabled: Boolean) {
+
+        fullscreen = enabled
+
+        if (enabled) {
+
+            activity?.requestedOrientation =
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+
+            activity?.window?.decorView?.systemUiVisibility =
+                (
+                    View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    )
+
+        } else {
+
+            activity?.requestedOrientation =
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+            activity?.window?.decorView?.systemUiVisibility = 0
+        }
+    }
+
+    fun goBack() {
+        if (fullscreen) {
+            changeFullscreen(false)
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler {
+        goBack()
+    }
+
+    DisposableEffect(player) {
+
+        val listener = object : Player.Listener {
+
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+
+                if (!playing) {
+                    showControls = true
+                    interactionKey++
+                }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                duration = player.duration.coerceAtLeast(0L)
+            }
+        }
+
+        player.addListener(listener)
+
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+
+            activity?.requestedOrientation =
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+            activity?.window?.decorView?.systemUiVisibility = 0
+        }
+    }
+
+    LaunchedEffect(player) {
+
+        while (isActive) {
+            position = player.currentPosition.coerceAtLeast(0L)
+            duration = player.duration.coerceAtLeast(0L)
+            isPlaying = player.isPlaying
+            delay(400)
+        }
+    }
+
+    LaunchedEffect(showControls, isPlaying, interactionKey) {
+
+        if (showControls && isPlaying) {
+            delay(3000)
+
+            if (isPlaying) {
+                showControls = false
+            }
+        }
+    }
+
+    LaunchedEffect(seekFeedbackKey) {
+
+        if (seekFeedback != 0) {
+            delay(700)
+            seekFeedback = 0
+        }
+    }
+
+    DisposableEffect(video.url) {
+        onDispose {
+            if (fullscreen) {
+                changeFullscreen(false)
+            }
+        }
+    }
+
+    if (fullscreen) {
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+
+            PlayerVideoContent(
+                player = player,
+                video = video,
+                videos = videos,
+                currentIndex = currentIndex,
+                showControls = showControls,
+                isPlaying = isPlaying,
+                position = position,
+                duration = duration,
+                volume = volume,
+                seekFeedback = seekFeedback,
+                onTap = {
+                    showControlsNow()
+                },
+                onDoubleTap = { forward ->
+
+                    seekBy(if (forward) 10_000L else -10_000L)
+
+                    seekFeedback = if (forward) 1 else -1
+                    seekFeedbackKey++
+
+                    showControls = false
+                },
+                onPlayPause = {
+                    togglePlayback()
+                },
+                onPrevious = {
+                    if (currentIndex > 0) {
+                        onVideoChange(currentIndex - 1)
+                    }
+                },
+                onNext = {
+                    if (currentIndex < videos.lastIndex) {
+                        onVideoChange(currentIndex + 1)
+                    }
+                },
+                onSeek = {
+                    player.seekTo(it)
+                    position = it
+                },
+                onVolumeChange = {
+                    volume = it
+                    player.volume = it
+                },
+                onFullscreen = {
+                    changeFullscreen(false)
+                },
+                onBack = {
+                    goBack()
+                }
+            )
+        }
+
+    } else {
+
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Bg)
+        ) {
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        goBack()
+                    }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+
+                Icon(
+                    Icons.Default.ArrowBack,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(23.dp)
+                )
+
+                Spacer(Modifier.width(10.dp))
+
+                Text(
+                    "ফিরে যান",
+                    color = Color.White,
+                    fontSize = 17.sp
+                )
+            }
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .background(Color.Black)
+            ) {
+
+                PlayerVideoContent(
+                    player = player,
+                    video = video,
+                    videos = videos,
+                    currentIndex = currentIndex,
+                    showControls = showControls,
+                    isPlaying = isPlaying,
+                    position = position,
+                    duration = duration,
+                    volume = volume,
+                    seekFeedback = seekFeedback,
+                    onTap = {
+                        showControlsNow()
+                    },
+                    onDoubleTap = { forward ->
+
+                        seekBy(if (forward) 10_000L else -10_000L)
+
+                        seekFeedback = if (forward) 1 else -1
+                        seekFeedbackKey++
+
+                        showControls = false
+                    },
+                    onPlayPause = {
+                        togglePlayback()
+                    },
+                    onPrevious = {
+                        if (currentIndex > 0) {
+                            onVideoChange(currentIndex - 1)
+                        }
+                    },
+                    onNext = {
+                        if (currentIndex < videos.lastIndex) {
+                            onVideoChange(currentIndex + 1)
+                        }
+                    },
+                    onSeek = {
+                        player.seekTo(it)
+                        position = it
+                    },
+                    onVolumeChange = {
+                        volume = it
+                        player.volume = it
+                    },
+                    onFullscreen = {
+                        changeFullscreen(true)
+                    },
+                    onBack = {
+                        goBack()
+                    }
+                )
+            }
+
+            Text(
+                video.name.substringBeforeLast('.'),
+                Modifier.padding(16.dp),
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                video.path,
+                Modifier.padding(horizontal = 16.dp),
+                color = Muted,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
+
+// ==========================================
+// PLAYER VIDEO + CUSTOM CONTROLLER
+// ==========================================
+
+@Composable
+private fun PlayerVideoContent(
+    player: ExoPlayer,
+    video: VideoItem,
+    videos: List<VideoItem>,
+    currentIndex: Int,
+    showControls: Boolean,
+    isPlaying: Boolean,
+    position: Long,
+    duration: Long,
+    volume: Float,
+    seekFeedback: Int,
+    onTap: () -> Unit,
+    onDoubleTap: (Boolean) -> Unit,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onVolumeChange: (Float) -> Unit,
+    onFullscreen: () -> Unit,
+    onBack: () -> Unit
+) {
+
+    Box(
         Modifier
             .fillMaxSize()
-            .background(Bg)
+            .background(Color.Black)
     ) {
-
-        Text(
-            "←  ফিরে যান",
-            Modifier
-                .clickable(onClick = onBack)
-                .padding(16.dp),
-            color = Color.White,
-            fontSize = 17.sp
-        )
 
         AndroidView(
             factory = { ctx ->
 
                 PlayerView(ctx).apply {
                     this.player = player
-                    useController = true
+                    useController = false
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    setKeepContentOnPlayerReset(true)
                 }
 
             },
+            update = {
+                it.player = player
+                it.useController = false
+            },
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
+                .fillMaxSize()
+                .pointerInput(video.url) {
+
+                    detectTapGestures(
+                        onTap = {
+                            onTap()
+                        },
+                        onDoubleTap = { offset ->
+
+                            val forward = offset.x >= size.width / 2f
+                            onDoubleTap(forward)
+                        }
+                    )
+                }
         )
 
-        Text(
-            video.name.substringBeforeLast('.'),
-            Modifier.padding(16.dp),
-            color = Color.White,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold
+        if (seekFeedback != 0) {
+
+            Box(
+                Modifier
+                    .align(
+                        if (seekFeedback > 0)
+                            Alignment.CenterEnd
+                        else
+                            Alignment.CenterStart
+                    )
+                    .padding(horizontal = 26.dp)
+                    .size(88.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xAA080B12)),
+                contentAlignment = Alignment.Center
+            ) {
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+
+                    Icon(
+                        if (seekFeedback > 0)
+                            Icons.Default.FastForward
+                        else
+                            Icons.Default.FastRewind,
+                        null,
+                        tint = Color.White,
+                        modifier = Modifier.size(34.dp)
+                    )
+
+                    Text(
+                        "10 seconds",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        if (showControls) {
+
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0x99000000),
+                                Color.Transparent,
+                                Color.Transparent,
+                                Color(0xCC000000)
+                            )
+                        )
+                    )
+            ) {
+
+                // উপরের অংশ: Back এবং ভিডিওর নাম
+                Row(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = 15.dp,
+                            vertical = 12.dp
+                        ),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+
+                    PremiumControlButton(
+                        onClick = onBack,
+                        size = 42.dp
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowBack,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(12.dp))
+
+                    Text(
+                        video.name.substringBeforeLast('.'),
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // মাঝখানে Previous / Play-Pause / Next
+                Row(
+                    Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+
+                    PremiumControlButton(
+                        onClick = onPrevious,
+                        size = 58.dp,
+                        enabled = currentIndex > 0
+                    ) {
+                        Icon(
+                            Icons.Default.SkipPrevious,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(34.dp))
+
+                    PremiumControlButton(
+                        onClick = onPlayPause,
+                        size = 76.dp,
+                        primary = true
+                    ) {
+                        Icon(
+                            if (isPlaying)
+                                Icons.Default.Pause
+                            else
+                                Icons.Default.PlayArrow,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier.size(43.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(34.dp))
+
+                    PremiumControlButton(
+                        onClick = onNext,
+                        size = 58.dp,
+                        enabled = currentIndex < videos.lastIndex
+                    ) {
+                        Icon(
+                            Icons.Default.SkipNext,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                }
+
+                // নিচের অংশ: Progress, Volume, Fullscreen
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = 14.dp,
+                            vertical = 10.dp
+                        )
+                ) {
+
+                    Slider(
+                        value = if (duration > 0L)
+                            position.coerceIn(0L, duration).toFloat()
+                        else 0f,
+                        onValueChange = {
+                            onSeek(it.toLong())
+                        },
+                        valueRange = 0f..(duration.coerceAtLeast(1L).toFloat()),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Orange,
+                            activeTrackColor = Orange,
+                            inactiveTrackColor = Color(0x77FFFFFF)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(24.dp)
+                    )
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+
+                        Text(
+                            formatTime(position),
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Text(
+                            " / ${formatTime(duration)}",
+                            color = Color(0xFFBFC6D2),
+                            fontSize = 12.sp
+                        )
+
+                        Spacer(Modifier.weight(1f))
+
+                        Icon(
+                            if (volume > 0f)
+                                Icons.Default.VolumeUp
+                            else
+                                Icons.Default.VolumeOff,
+                            null,
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(21.dp)
+                                .clickable {
+                                    onVolumeChange(
+                                        if (volume > 0f) 0f else 1f
+                                    )
+                                }
+                        )
+
+                        Spacer(Modifier.width(7.dp))
+
+                        Slider(
+                            value = volume,
+                            onValueChange = onVolumeChange,
+                            valueRange = 0f..1f,
+                            modifier = Modifier.width(75.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = Color.White,
+                                inactiveTrackColor = Color(0x66FFFFFF)
+                            )
+                        )
+
+                        Spacer(Modifier.width(8.dp))
+
+                        PremiumControlButton(
+                            onClick = onFullscreen,
+                            size = 40.dp
+                        ) {
+                            Icon(
+                                Icons.Default.Fullscreen,
+                                null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// PREMIUM ANIMATED BUTTON
+// ==========================================
+
+@Composable
+private fun PremiumControlButton(
+    onClick: () -> Unit,
+    size: androidx.compose.ui.unit.Dp,
+    primary: Boolean = false,
+    enabled: Boolean = true,
+    content: @Composable BoxScope.() -> Unit
+) {
+
+    val interaction = remember {
+        MutableInteractionSource()
+    }
+
+    val pressed by interaction.collectIsPressedAsState()
+
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.88f else 1f,
+        label = "buttonScale"
+    )
+
+    val background =
+        if (primary)
+            Orange
+        else
+            Color(0xCC202735)
+
+    Box(
+        Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                if (enabled) background
+                else Color(0x66505A69)
+            )
+            .clickable(
+                enabled = enabled,
+                interactionSource = interaction,
+                indication = ripple(
+                    bounded = true,
+                    color = Color.White
+                ),
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(1.dp)
+                .clip(CircleShape)
+                .background(
+                    if (pressed)
+                        Color(0x33FFFFFF)
+                    else
+                        Color.Transparent
+                )
         )
 
-        Text(
-            video.path,
-            Modifier.padding(horizontal = 16.dp),
-            color = Muted,
-            fontSize = 12.sp
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(2.dp)
+                .then(
+                    Modifier
+                        .size(size * scale)
+                ),
+            contentAlignment = Alignment.Center,
+            content = content
+        )
+    }
+}
+
+// ==========================================
+// TIME FORMAT
+// ==========================================
+
+private fun formatTime(milliseconds: Long): String {
+
+    if (milliseconds < 0L || milliseconds == Long.MAX_VALUE) {
+        return "00:00"
+    }
+
+    val totalSeconds = milliseconds / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+
+    return if (hours > 0L) {
+        String.format(
+            "%d:%02d:%02d",
+            hours,
+            minutes,
+            seconds
+        )
+    } else {
+        String.format(
+            "%02d:%02d",
+            minutes,
+            seconds
         )
     }
 }
