@@ -1143,13 +1143,14 @@ private fun VideoPlayerScreen(
 
     val context = LocalContext.current
 
-    // ২ সেকেন্ড থেকে ৮ সেকেন্ড পর্যন্ত Playback Buffer-এর লক্ষ্য
-    // এটি Media3-এর সময়ভিত্তিক Buffer নিয়ন্ত্রণ; নির্দিষ্ট HTTP Chunk নয়।
+    // সর্বোচ্চ ৫ সেকেন্ড Playback Buffer
+    // এটি Media3-এর সময়ভিত্তিক Buffer নিয়ন্ত্রণ;
+    // নির্দিষ্ট ২ সেকেন্ডের HTTP Chunk নয়।
     val loadControl = remember {
         DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 2_000, // Minimum buffer
-                8_000, // Maximum target buffer
+                5_000, // Maximum target buffer: 5 seconds
                 2_000, // Initial playback buffer
                 2_000  // Rebuffer playback buffer
             )
