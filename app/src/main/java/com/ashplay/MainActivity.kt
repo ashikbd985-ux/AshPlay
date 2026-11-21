@@ -2,6 +2,7 @@
 package com.ashplay
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.TrafficStats
 import android.os.Bundle
@@ -48,6 +49,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -62,79 +65,24 @@ private val Green = Color(0xFF27E66B)
 
 // বাংলা থেকে বাংলিশে রূপান্তরের অক্ষর তালিকা
 private val bengaliToLatin = mapOf(
-    'অ' to "o",
-    'আ' to "a",
-    'ই' to "i",
-    'ঈ' to "i",
-    'উ' to "u",
-    'ঊ' to "u",
-    'ঋ' to "ri",
-    'এ' to "e",
-    'ঐ' to "oi",
-    'ও' to "o",
-    'ঔ' to "ou",
-
-    'ক' to "k",
-    'খ' to "kh",
-    'গ' to "g",
-    'ঘ' to "gh",
-    'ঙ' to "ng",
-
-    'চ' to "ch",
-    'ছ' to "chh",
-    'জ' to "j",
-    'ঝ' to "jh",
-    'ঞ' to "n",
-
-    'ট' to "t",
-    'ঠ' to "th",
-    'ড' to "d",
-    'ঢ' to "dh",
-    'ণ' to "n",
-
-    'ত' to "t",
-    'থ' to "th",
-    'দ' to "d",
-    'ধ' to "dh",
-    'ন' to "n",
-
-    'প' to "p",
-    'ফ' to "f",
-    'ব' to "b",
-    'ভ' to "bh",
-    'ম' to "m",
-
-    'য' to "j",
-    'র' to "r",
-    'ল' to "l",
-    'শ' to "sh",
-    'ষ' to "sh",
-    'স' to "s",
-    'হ' to "h",
-
-    'ড়' to "r",
-    'ঢ়' to "rh",
-    'য়' to "y",
-
-    'া' to "a",
-    'ি' to "i",
-    'ী' to "i",
-    'ু' to "u",
-    'ূ' to "u",
-    'ৃ' to "ri",
-    'ে' to "e",
-    'ৈ' to "oi",
-    'ো' to "o",
-    'ৌ' to "ou",
-
-    'ং' to "ng",
-    'ঃ' to "h",
-    'ঁ' to "n",
-    '্' to "",
-    'ৎ' to "t"
+    'অ' to "o", 'আ' to "a", 'ই' to "i", 'ঈ' to "i",
+    'উ' to "u", 'ঊ' to "u", 'ঋ' to "ri", 'এ' to "e",
+    'ঐ' to "oi", 'ও' to "o", 'ঔ' to "ou",
+    'ক' to "k", 'খ' to "kh", 'গ' to "g", 'ঘ' to "gh",
+    'ঙ' to "ng", 'চ' to "ch", 'ছ' to "chh", 'জ' to "j",
+    'ঝ' to "jh", 'ঞ' to "n", 'ট' to "t", 'ঠ' to "th",
+    'ড' to "d", 'ঢ' to "dh", 'ণ' to "n", 'ত' to "t",
+    'থ' to "th", 'দ' to "d", 'ধ' to "dh", 'ন' to "n",
+    'প' to "p", 'ফ' to "f", 'ব' to "b", 'ভ' to "bh",
+    'ম' to "m", 'য' to "j", 'র' to "r", 'ল' to "l",
+    'শ' to "sh", 'ষ' to "sh", 'স' to "s", 'হ' to "h",
+    'ড়' to "r", 'ঢ়' to "rh", 'য়' to "y",
+    'া' to "a", 'ি' to "i", 'ী' to "i", 'ু' to "u",
+    'ূ' to "u", 'ৃ' to "ri", 'ে' to "e", 'ৈ' to "oi",
+    'ো' to "o", 'ৌ' to "ou", 'ং' to "ng", 'ঃ' to "h",
+    'ঁ' to "n", '্' to "", 'ৎ' to "t"
 )
 
-// বাংলা ও বাংলিশ সার্চের জন্য টেক্সট স্বাভাবিক করা
 private fun normalizeForSearch(text: String): String {
     return buildString {
         text.lowercase().forEach { char ->
@@ -149,7 +97,8 @@ private fun normalizeForSearch(text: String): String {
 data class VideoItem(
     val name: String,
     val url: String,
-    val path: String
+    val path: String,
+    val thumbnailUrl: String = ""
 )
 
 data class Category(
@@ -164,6 +113,153 @@ data class FeedItem(
 
 enum class BottomTab {
     HOME, FRIENDS, PROFILE
+}
+
+// ==========================================
+// THUMBNAIL FUNCTIONS
+// ==========================================
+
+// সার্ভারে আগে থেকে থাকা থাম্বনেইল ডাউনলোড
+private fun downloadServerThumbnail(url: String): Bitmap? {
+    if (url.isBlank()) return null
+
+    var connection: HttpURLConnection? = null
+
+    return try {
+        connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10000
+            readTimeout = 15000
+            requestMethod = "GET"
+        }
+
+        if (connection.responseCode == 200) {
+            connection.inputStream.use {
+                BitmapFactory.decodeStream(it)
+            }
+        } else {
+            null
+        }
+
+    } catch (_: Exception) {
+        null
+    } finally {
+        connection?.disconnect()
+    }
+}
+
+// ভিডিও থেকে একটি ফ্রেম তৈরি
+private fun createVideoThumbnail(videoUrl: String): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+
+    return try {
+        retriever.setDataSource(videoUrl, HashMap())
+
+        retriever.getFrameAtTime(
+            1_000_000,
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+        )
+    } catch (_: Exception) {
+        null
+    } finally {
+        try {
+            retriever.release()
+        } catch (_: Exception) {
+        }
+    }
+}
+
+// তৈরি করা JPEG থাম্বনেইল PHP সার্ভারে আপলোড
+private fun uploadThumbnail(
+    apiUrl: String,
+    videoPath: String,
+    bitmap: Bitmap
+): Boolean {
+
+    var connection: HttpURLConnection? = null
+
+    return try {
+
+        val output = ByteArrayOutputStream()
+
+        bitmap.compress(
+            Bitmap.CompressFormat.JPEG,
+            82,
+            output
+        )
+
+        val imageBytes = output.toByteArray()
+        val boundary = "AshPlayBoundary${UUID.randomUUID()}"
+
+        connection = (URL("$apiUrl?action=thumbnail_upload")
+            .openConnection() as HttpURLConnection).apply {
+
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 15000
+            readTimeout = 20000
+
+            setRequestProperty(
+                "Content-Type",
+                "multipart/form-data; boundary=$boundary"
+            )
+        }
+
+        DataOutputStream(connection.outputStream).use { data ->
+
+            data.writeBytes("--$boundary\r\n")
+            data.writeBytes(
+                "Content-Disposition: form-data; name=\"path\"\r\n\r\n"
+            )
+            data.write(videoPath.toByteArray(Charsets.UTF_8))
+            data.writeBytes("\r\n")
+
+            data.writeBytes("--$boundary\r\n")
+            data.writeBytes(
+                "Content-Disposition: form-data; name=\"thumbnail\"; filename=\"thumbnail.jpg\"\r\n"
+            )
+            data.writeBytes("Content-Type: image/jpeg\r\n\r\n")
+
+            data.write(imageBytes)
+
+            data.writeBytes("\r\n--$boundary--\r\n")
+            data.flush()
+        }
+
+        connection.responseCode in 200..299
+
+    } catch (_: Exception) {
+        false
+    } finally {
+        connection?.disconnect()
+    }
+}
+
+// সার্ভার ক্যাশ → না থাকলে তৈরি → আপলোড
+private suspend fun getOrCreateThumbnail(
+    video: VideoItem
+): Bitmap? = withContext(Dispatchers.IO) {
+
+    // প্রথমে সার্ভারের ক্যাশ পরীক্ষা
+    val serverBitmap = downloadServerThumbnail(video.thumbnailUrl)
+
+    if (serverBitmap != null) {
+        return@withContext serverBitmap
+    }
+
+    // সার্ভারে না থাকলে ভিডিও থেকে তৈরি
+    val newBitmap = createVideoThumbnail(video.url)
+        ?: return@withContext null
+
+    // সার্ভারে আপলোড
+    uploadThumbnail(
+        API_URL,
+        video.path,
+        newBitmap
+    )
+
+    // আপলোড সফল হোক বা না হোক,
+    // বর্তমান সেশনে তৈরি ছবিটি দেখানো হবে
+    newBitmap
 }
 
 class MainActivity : ComponentActivity() {
@@ -271,9 +367,10 @@ private fun AshPlayApp() {
                     val v = vArr.getJSONObject(j)
 
                     vids += VideoItem(
-                        v.optString("name"),
-                        v.optString("url"),
-                        v.optString("path")
+                        name = v.optString("name"),
+                        url = v.optString("url"),
+                        path = v.optString("path"),
+                        thumbnailUrl = v.optString("thumbnail_url")
                     )
                 }
 
@@ -457,7 +554,6 @@ private fun AshPlayApp() {
 
                         selectedTab == BottomTab.HOME -> {
 
-                            // প্রতিটি ক্যাটাগরির সব ভিডিও Feed-এ থাকবে
                             val feed = remember(categories) {
                                 categories.flatMap { cat ->
                                     cat.videos.map { video ->
@@ -466,7 +562,6 @@ private fun AshPlayApp() {
                                 }.shuffled()
                             }
 
-                            // বাংলা এবং বাংলিশ উভয় ভাষায় সার্চ
                             val searchQuery =
                                 normalizeForSearch(query)
 
@@ -738,40 +833,13 @@ private fun VideoFeedCard(
     onClick: () -> Unit
 ) {
 
-    var bitmap by remember(item.video.url) {
+    var bitmap by remember(item.video.path) {
         mutableStateOf<Bitmap?>(null)
     }
 
-    LaunchedEffect(item.video.url) {
+    LaunchedEffect(item.video.path) {
 
-        bitmap = withContext(Dispatchers.IO) {
-
-            val retriever = MediaMetadataRetriever()
-
-            try {
-
-                retriever.setDataSource(
-                    item.video.url,
-                    HashMap()
-                )
-
-                retriever.getFrameAtTime(
-                    1_000_000,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                )
-
-            } catch (_: Exception) {
-
-                null
-
-            } finally {
-
-                try {
-                    retriever.release()
-                } catch (_: Exception) {
-                }
-            }
-        }
+        bitmap = getOrCreateThumbnail(item.video)
     }
 
     Card(
