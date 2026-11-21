@@ -1,3 +1,4 @@
+
 package com.ashplay
 
 import android.graphics.Bitmap
@@ -340,3 +341,888 @@ private fun AshPlayApp() {
                 c.disconnect()
             }
         }
+
+    suspend fun loadLibrary() {
+
+        loading = true
+        error = null
+
+        try {
+            val json = JSONObject(request(API_URL))
+
+            check(json.optBoolean("success")) {
+                json.optString("error", "API response error")
+            }
+
+            val arr = json.getJSONArray("categories")
+            val result = mutableListOf<Category>()
+
+            for (i in 0 until arr.length()) {
+
+                val c = arr.getJSONObject(i)
+                val vArr = c.getJSONArray("videos")
+                val vids = mutableListOf<VideoItem>()
+
+                for (j in 0 until vArr.length()) {
+
+                    val v = vArr.getJSONObject(j)
+
+                    vids += VideoItem(
+                        name = v.optString("name"),
+                        url = v.optString("url"),
+                        path = v.optString("path"),
+                        thumbnailUrl = v.optString("thumbnail_url")
+                    )
+                }
+
+                if (vids.isNotEmpty()) {
+                    result += Category(
+                        c.optString("name"),
+                        vids
+                    )
+                }
+            }
+
+            categories = result
+
+            onlineCount = json.optInt(
+                "online_viewers",
+                onlineCount
+            )
+
+        } catch (e: Exception) {
+
+            error =
+                "সার্ভারে সংযোগ করা যায়নি। ফোন ও কম্পিউটার একই Wi-Fi-তে আছে কি না এবং XAMPP Apache চালু আছে কি না দেখুন.\n${e.message ?: ""}"
+
+        } finally {
+            loading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+
+        loadLibrary()
+
+        var previous =
+            TrafficStats.getUidRxBytes(Process.myUid())
+
+        while (isActive) {
+
+            delay(2000)
+
+            val current =
+                TrafficStats.getUidRxBytes(Process.myUid())
+
+            txBytes =
+                if (previous >= 0 && current >= previous)
+                    current - previous
+                else
+                    0L
+
+            previous = current
+        }
+    }
+
+    LaunchedEffect(Unit) {
+
+        while (isActive) {
+
+            try {
+                onlineCount = JSONObject(
+                    request("$API_URL?action=count")
+                ).optInt("online_viewers", onlineCount)
+
+            } catch (_: Exception) {
+            }
+
+            delay(10000)
+        }
+    }
+
+    LaunchedEffect(selectedVideo?.url) {
+
+        val video = selectedVideo ?: return@LaunchedEffect
+
+        val session = UUID.randomUUID().toString()
+
+        try {
+            while (isActive) {
+
+                request(
+                    "$API_URL?action=heartbeat&session_id=$session"
+                )
+
+                delay(15000)
+            }
+
+        } finally {
+
+            try {
+                request(
+                    "$API_URL?action=leave&session_id=$session"
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = Orange,
+            background = Bg,
+            surface = Panel
+        )
+    ) {
+
+        Surface(
+            Modifier.fillMaxSize(),
+            color = Bg
+        ) {
+
+            if (selectedVideo != null) {
+
+                VideoPlayerScreen(
+                    selectedVideo!!,
+                    onBack = {
+                        selectedVideo = null
+                    }
+                )
+
+            } else {
+
+                Column(Modifier.fillMaxSize()) {
+
+                    AshPlayHeader(
+                        txBytes,
+                        onlineCount
+                    )
+
+                    SearchBar(
+                        query,
+                        { query = it },
+                        { }
+                    )
+
+                    when {
+
+                        loading -> {
+
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = Orange
+                                )
+                            }
+                        }
+
+                        error != null -> {
+
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .padding(22.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+
+                                Text(
+                                    error!!,
+                                    color = Color(0xFFFFB4AB)
+                                )
+
+                                Spacer(Modifier.height(12.dp))
+
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            loadLibrary()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Orange
+                                    )
+                                ) {
+                                    Text("আবার চেষ্টা করুন")
+                                }
+                            }
+                        }
+
+                        selectedTab == BottomTab.HOME -> {
+
+                            val feed = remember(categories) {
+                                categories.flatMap { cat ->
+                                    cat.videos.map { video ->
+                                        FeedItem(cat.name, video)
+                                    }
+                                }.shuffled()
+                            }
+
+                            val searchQuery =
+                                normalizeForSearch(query)
+
+                            val filtered = feed.filter { item ->
+
+                                searchQuery.isBlank() ||
+
+                                normalizeForSearch(
+                                    item.video.name.substringBeforeLast('.')
+                                ).contains(searchQuery) ||
+
+                                normalizeForSearch(
+                                    item.category
+                                ).contains(searchQuery)
+                            }
+
+                            if (filtered.isEmpty()) {
+
+                                Box(
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+
+                                    Text(
+                                        if (query.isBlank())
+                                            "কোনো ভিডিও পাওয়া যায়নি"
+                                        else
+                                            "সার্চে কোনো ভিডিও পাওয়া যায়নি",
+                                        color = Muted
+                                    )
+                                }
+
+                            } else {
+
+                                LazyColumn(
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(
+                                        start = 12.dp,
+                                        end = 12.dp,
+                                        top = 8.dp,
+                                        bottom = 12.dp
+                                    ),
+                                    verticalArrangement =
+                                        Arrangement.spacedBy(12.dp)
+                                ) {
+
+                                    items(
+                                        filtered,
+                                        key = { it.video.path }
+                                    ) { item ->
+
+                                        VideoFeedCard(item) {
+                                            selectedVideo = item.video
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        selectedTab == BottomTab.FRIENDS -> {
+
+                            EmptyTab(
+                                Modifier.weight(1f),
+                                "Friends",
+                                "বন্ধুদের ফিচার পরবর্তী ধাপে যুক্ত হবে"
+                            )
+                        }
+
+                        else -> {
+
+                            EmptyTab(
+                                Modifier.weight(1f),
+                                "Profile",
+                                "প্রোফাইল ফিচার পরবর্তী ধাপে যুক্ত হবে"
+                            )
+                        }
+                    }
+
+                    BottomNavigation(selectedTab) {
+                        selectedTab = it
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AshPlayHeader(
+    txBytes: Long,
+    onlineCount: Int
+) {
+
+    val txText =
+        if (txBytes >= 1024L * 1024L)
+            String.format(
+                "%.1f MB",
+                txBytes / (1024.0 * 1024.0)
+            )
+        else
+            String.format(
+                "%.0f KB",
+                txBytes / 1024.0
+            )
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(76.dp)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+
+        Row(
+            Modifier.align(Alignment.CenterStart),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+
+            Text(
+                "TX",
+                color = Orange,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+
+            Spacer(Modifier.width(5.dp))
+
+            Text(
+                txText,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+
+            Image(
+                painterResource(R.drawable.ashplay_logo),
+                "AshPlay logo",
+                Modifier.size(42.dp)
+            )
+
+            Spacer(Modifier.width(8.dp))
+
+            Text(
+                "AshPlay",
+                color = Color.White,
+                fontSize = 27.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
+
+        Row(
+            Modifier.align(Alignment.CenterEnd),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+
+            Box(
+                Modifier
+                    .size(10.dp)
+                    .background(Green, CircleShape)
+            )
+
+            Spacer(Modifier.width(8.dp))
+
+            Text(
+                onlineCount.toString(),
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchBar(
+    query: String,
+    onQuery: (String) -> Unit,
+    onSearch: () -> Unit
+) {
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(
+                start = 16.dp,
+                end = 16.dp,
+                top = 7.dp,
+                bottom = 12.dp
+            ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+
+        Row(
+            Modifier
+                .weight(1f)
+                .height(54.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Panel)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+
+            Icon(
+                Icons.Default.Search,
+                null,
+                tint = Color(0xFFB8C3D4),
+                modifier = Modifier.size(25.dp)
+            )
+
+            Spacer(Modifier.width(12.dp))
+
+            Box(Modifier.weight(1f)) {
+
+                if (query.isEmpty()) {
+
+                    Text(
+                        "Search videos...",
+                        color = Color(0xFF8E9AAF),
+                        fontSize = 16.sp
+                    )
+                }
+
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQuery,
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        color = Color.White,
+                        fontSize = 16.sp
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        Spacer(Modifier.width(10.dp))
+
+        Surface(
+            onClick = onSearch,
+            modifier = Modifier.size(
+                width = 62.dp,
+                height = 54.dp
+            ),
+            shape = RoundedCornerShape(16.dp),
+            color = Orange
+        ) {
+
+            Box(contentAlignment = Alignment.Center) {
+
+                Icon(
+                    Icons.Default.Search,
+                    null,
+                    tint = Color.White,
+                    modifier = Modifier.size(29.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoFeedCard(
+    item: FeedItem,
+    onClick: () -> Unit
+) {
+
+    var bitmap by remember(item.video.path) {
+        mutableStateOf<Bitmap?>(null)
+    }
+
+    LaunchedEffect(item.video.path) {
+
+        bitmap = getOrCreateThumbnail(item.video)
+    }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(15.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Panel
+        )
+    ) {
+
+        Column {
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Color(0xFF27354A),
+                                Color(0xFF111722)
+                            )
+                        )
+                    )
+                    .clickable(onClick = onClick),
+                contentAlignment = Alignment.Center
+            ) {
+
+                if (bitmap != null) {
+
+                    Image(
+                        bitmap!!.asImageBitmap(),
+                        null,
+                        Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+
+                } else {
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+
+                        Text(
+                            "AshPlay",
+                            color = Color.White.copy(alpha = .7f),
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            item.category,
+                            color = Color(0xFFFFC18B),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+
+                Box(
+                    Modifier
+                        .size(58.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x99000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+
+                    Text(
+                        "▶",
+                        color = Color.White,
+                        fontSize = 27.sp
+                    )
+                }
+
+                Surface(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(9.dp),
+                    color = Color(0xDD080A0F),
+                    shape = RoundedCornerShape(5.dp)
+                ) {
+
+                    Text(
+                        "PLAY",
+                        Modifier.padding(
+                            horizontal = 8.dp,
+                            vertical = 4.dp
+                        ),
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = 13.dp,
+                        end = 8.dp,
+                        top = 10.dp,
+                        bottom = 11.dp
+                    ),
+                verticalAlignment = Alignment.Top
+            ) {
+
+                Box(
+                    Modifier
+                        .size(43.dp)
+                        .clip(CircleShape)
+                        .background(Orange),
+                    contentAlignment = Alignment.Center
+                ) {
+
+                    Text(
+                        item.category.take(1).uppercase(),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp
+                    )
+                }
+
+                Spacer(Modifier.width(11.dp))
+
+                Column(Modifier.weight(1f)) {
+
+                    Text(
+                        item.video.name.substringBeforeLast('.'),
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(Modifier.height(7.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+
+                        Surface(
+                            color = Color(0xFF303D50),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+
+                            Text(
+                                item.category,
+                                Modifier.padding(
+                                    horizontal = 8.dp,
+                                    vertical = 4.dp
+                                ),
+                                color = Color(0xFFD9E4F5),
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        }
+
+                        Spacer(Modifier.width(8.dp))
+
+                        Text(
+                            "AshPlay Library",
+                            color = Muted,
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Icon(
+                    Icons.Default.MoreVert,
+                    null,
+                    tint = Color(0xFFD6DEEA),
+                    modifier = Modifier
+                        .padding(top = 3.dp)
+                        .size(22.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BottomNavigation(
+    selected: BottomTab,
+    onSelect: (BottomTab) -> Unit
+) {
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(68.dp)
+            .background(Color(0xFF0D111A)),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+
+        BottomItem(
+            Modifier.weight(1f),
+            "Home",
+            Icons.Default.Home,
+            selected == BottomTab.HOME
+        ) {
+            onSelect(BottomTab.HOME)
+        }
+
+        BottomItem(
+            Modifier.weight(1f),
+            "Friends",
+            Icons.Default.People,
+            selected == BottomTab.FRIENDS
+        ) {
+            onSelect(BottomTab.FRIENDS)
+        }
+
+        BottomItem(
+            Modifier.weight(1f),
+            "Profile",
+            Icons.Default.Person,
+            selected == BottomTab.PROFILE
+        ) {
+            onSelect(BottomTab.PROFILE)
+        }
+    }
+}
+
+@Composable
+private fun BottomItem(
+    modifier: Modifier,
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    active: Boolean,
+    onClick: () -> Unit
+) {
+
+    val color =
+        if (active) Orange
+        else Color(0xFFD6DEEA)
+
+    Column(
+        modifier
+            .fillMaxHeight()
+            .clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+
+        Icon(
+            icon,
+            null,
+            tint = color,
+            modifier = Modifier.size(25.dp)
+        )
+
+        Spacer(Modifier.height(3.dp))
+
+        Text(
+            label,
+            color = color,
+            fontSize = 11.sp,
+            fontWeight =
+                if (active) FontWeight.Bold
+                else FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun EmptyTab(
+    modifier: Modifier,
+    title: String,
+    message: String
+) {
+
+    Column(
+        modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+
+        Text(
+            title,
+            color = Color.White,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            message,
+            color = Muted,
+            fontSize = 14.sp
+        )
+    }
+}
+
+@Composable
+private fun VideoPlayerScreen(
+    video: VideoItem,
+    onBack: () -> Unit
+) {
+
+    val context = LocalContext.current
+
+    // ২ সেকেন্ড থেকে ৮ সেকেন্ড পর্যন্ত Playback Buffer-এর লক্ষ্য
+    // এটি Media3-এর সময়ভিত্তিক Buffer নিয়ন্ত্রণ; নির্দিষ্ট HTTP Chunk নয়।
+    val loadControl = remember {
+        DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                2_000, // Minimum buffer
+                8_000, // Maximum target buffer
+                2_000, // Initial playback buffer
+                2_000  // Rebuffer playback buffer
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .setBackBuffer(0, false)
+            .build()
+    }
+
+    val player = remember(video.url) {
+
+        ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
+            .build()
+            .apply {
+
+                setMediaItem(
+                    MediaItem.fromUri(video.url)
+                )
+
+                prepare()
+                playWhenReady = true
+            }
+    }
+
+    DisposableEffect(player) {
+
+        onDispose {
+            player.release()
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+    ) {
+
+        Text(
+            "←  ফিরে যান",
+            Modifier
+                .clickable(onClick = onBack)
+                .padding(16.dp),
+            color = Color.White,
+            fontSize = 17.sp
+        )
+
+        AndroidView(
+            factory = { ctx ->
+
+                PlayerView(ctx).apply {
+                    this.player = player
+                    useController = true
+                }
+
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+        )
+
+        Text(
+            video.name.substringBeforeLast('.'),
+            Modifier.padding(16.dp),
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Text(
+            video.path,
+            Modifier.padding(horizontal = 16.dp),
+            color = Muted,
+            fontSize = 12.sp
+        )
+    }
+}
